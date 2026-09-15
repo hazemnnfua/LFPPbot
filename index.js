@@ -14,6 +14,8 @@ require('dotenv').config();
 const PREGUNTAS = require('./preguntas');
 const postulacionesDB = require('./postulaciones');
 
+const ROL_ARBITRO_ID = '1526591280749084742';
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -351,6 +353,16 @@ async function manejarBotonPostulacion(interaction) {
     rechazar: 'Gracias por postularte. Por ahora tu postulación a árbitro de la LFPP fue **rechazada**. Puedes volver a intentarlo más adelante.',
     entrevista: '🗣️ Tu postulación a árbitro de la LFPP pasó a la etapa de **entrevista**. Un admin te va a contactar para coordinarla.',
   };
+
+  if (accion === 'aceptar') {
+    try {
+      const guild = await client.guilds.fetch(process.env.GUILD_ID);
+      const member = await guild.members.fetch(postulacion.userId);
+      await member.roles.add(ROL_ARBITRO_ID);
+    } catch (err) {
+      console.error(`No pude asignar el rol de árbitro a ${postulacion.usuarioTag} (${postulacion.userId}):`, err);
+    }
+  }
 
   try {
     const user = await client.users.fetch(postulacion.userId);
