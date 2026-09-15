@@ -220,6 +220,21 @@ function limpiarTextoPregunta(p) {
 async function manejarComandoPostular(interaction) {
   const userId = interaction.user.id;
 
+  const restriccion = postulacionesDB.obtenerRestriccion(userId);
+  if (restriccion?.tipo === 'aceptada') {
+    return interaction.reply({
+      content: '✅ Ya fuiste aceptado como árbitro anteriormente, así que no podés volver a postular.',
+      ephemeral: true,
+    });
+  }
+  if (restriccion?.tipo === 'cooldown') {
+    const timestamp = Math.floor(restriccion.disponibleEn.getTime() / 1000);
+    return interaction.reply({
+      content: `⏳ Tu postulación anterior fue rechazada. Podés volver a postular <t:${timestamp}:R> (<t:${timestamp}:f>).`,
+      ephemeral: true,
+    });
+  }
+
   if (postulacionesDB.tienePendiente(userId)) {
     return interaction.reply({
       content: '⏳ Ya tienes una postulación **pendiente** de revisión. Espera la respuesta de un admin antes de volver a postular.',
