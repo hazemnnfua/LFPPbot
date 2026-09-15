@@ -220,6 +220,20 @@ function limpiarTextoPregunta(p) {
 async function manejarComandoPostular(interaction) {
   const userId = interaction.user.id;
 
+  try {
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const member = await guild.members.fetch(userId);
+    if (member.roles.cache.has(ROL_ARBITRO_ID)) {
+      return interaction.reply({
+        content: '✅ Ya tenés el rol de árbitro, así que no podés volver a postular.',
+        ephemeral: true,
+      });
+    }
+  } catch (err) {
+    console.error('No pude verificar el rol de árbitro del usuario antes de postular:', err);
+    // si falla la verificación seguimos igual, no queremos bloquear postulaciones legítimas por un error de red
+  }
+
   const restriccion = postulacionesDB.obtenerRestriccion(userId);
   if (restriccion?.tipo === 'aceptada') {
     return interaction.reply({
