@@ -23,6 +23,7 @@ const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutos para completar el login
 
 function crearLinkVerificacion(discordId) {
   const state = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(8).toString('hex');
   PENDIENTES.set(state, { discordId, expiresAt: Date.now() + STATE_TTL_MS });
 
   const url = new URL('https://apis.roblox.com/oauth/v1/authorize');
@@ -30,8 +31,10 @@ function crearLinkVerificacion(discordId) {
   url.searchParams.set('redirect_uri', REDIRECT_URI);
   url.searchParams.set('scope', 'openid profile');
   url.searchParams.set('response_type', 'code');
+  url.searchParams.set('nonce', nonce);
   url.searchParams.set('state', state);
 
+  console.log('[oauth] Link generado:', url.toString());
   return url.toString();
 }
 
