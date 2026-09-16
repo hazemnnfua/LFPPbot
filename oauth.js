@@ -45,6 +45,7 @@ function resolverState(state) {
 }
 
 async function intercambiarCodigo(code) {
+  console.log('[oauth] Intercambiando code por token...');
   const res = await fetch('https://apis.roblox.com/oauth/v1/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -55,15 +56,20 @@ async function intercambiarCodigo(code) {
       code,
       redirect_uri: REDIRECT_URI,
     }),
+    signal: AbortSignal.timeout(10000),
   });
+  console.log('[oauth] Respuesta de token exchange:', res.status);
   if (!res.ok) throw new Error(`Roblox token exchange falló: ${res.status} ${await res.text()}`);
   return res.json(); // { access_token, id_token, expires_in, ... }
 }
 
 async function obtenerUserinfo(accessToken) {
+  console.log('[oauth] Pidiendo userinfo...');
   const res = await fetch('https://apis.roblox.com/oauth/v1/userinfo', {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10000),
   });
+  console.log('[oauth] Respuesta de userinfo:', res.status);
   if (!res.ok) throw new Error(`Roblox userinfo falló: ${res.status}`);
   return res.json(); // { sub: robloxId, preferred_username, name, picture, created_at }
 }

@@ -485,14 +485,18 @@ async function manejarComandoVerificarReset(interaction) {
 // Llamado desde el servidor Express cuando Roblox redirige de vuelta con el code.
 // Devuelve { ok, robloxUsername, discordId } o { ok:false, motivo }.
 async function procesarCallbackRoblox(code, state) {
+  console.log('[verificacion] Callback recibido, resolviendo state...');
   const pendiente = robloxOAuth.resolverState(state);
   if (!pendiente) return { ok: false, motivo: 'state_invalido' };
   const { discordId } = pendiente;
+  console.log('[verificacion] State válido para discordId:', discordId);
 
   const tokenData = await robloxOAuth.intercambiarCodigo(code);
+  console.log('[verificacion] Token obtenido, pidiendo userinfo...');
   const userinfo = await robloxOAuth.obtenerUserinfo(tokenData.access_token);
   const robloxId = userinfo.sub;
   const robloxUsername = userinfo.preferred_username || userinfo.name;
+  console.log('[verificacion] Userinfo OK:', robloxId, robloxUsername);
 
   const ocupado = verificacionDB.getVerificacionPorRobloxId(robloxId);
   if (ocupado && ocupado[0] !== discordId) {
@@ -504,9 +508,11 @@ async function procesarCallbackRoblox(code, state) {
     robloxUsername,
     fechaVerificacion: new Date().toISOString(),
   });
+  console.log('[verificacion] Guardado en verificaciones.json');
 
   // Nickname + rol en el server
   try {
+    console.log('[verificacion] Buscando guild y member para nickname/rol...');
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
     const member = await guild.members.fetch(discordId);
 
@@ -517,17 +523,20 @@ async function procesarCallbackRoblox(code, state) {
     const nombreRecortado = nombreBase.slice(0, Math.max(espacioDisponible, 0));
     const nuevoNickname = `${nombreRecortado}${sufijo}`.slice(0, 32);
 
-    await member.setNickname(nuevoNickname).catch(() => {});
-    if (ROL_VERIFICADO_ID) await member.roles.add(ROL_VERIFICADO_ID).catch(() => {});
+    await member.setNickname(nuevoNickname).catch((e) => console.error('[verificacion] setNickname falló:', e.message));
+    if (ROL_VERIFICADO_ID) await member.roles.add(ROL_VERIFICADO_ID).catch((e) => console.error('[verificacion] roles.add falló:', e.message));
+    console.log('[verificacion] Nickname/rol aplicados');
   } catch (err) {
     console.error('No pude poner nickname/rol de verificado:', err);
   }
 
   try {
+    console.log('[verificacion] Enviando DM de confirmación...');
     const user = await client.users.fetch(discordId);
     await user.send(`✅ ¡Listo! Tu Discord quedó vinculado a tu cuenta de Roblox **${robloxUsername}**.`);
   } catch (err) {
     // DMs cerrados, no bloqueante
+    console.error('[verificacion] No se pudo mandar el DM (probablemente cerrados):', err.message);
   }
 
   try {
@@ -536,10 +545,11 @@ async function procesarCallbackRoblox(code, state) {
       await canalAdmin.send(`🔗 <@${discordId}> se verificó como **${robloxUsername}** (ID: ${robloxId}).`);
     }
   } catch (err) {
-    // no bloqueante
+    console.error('[verificacion] Error avisando en ADMIN_CHANNEL_ID:', err.message);
   }
 
   try {
+    console.log('[verificacion] Publicando en canal de registros...');
     const canalRegistros = await client.channels.fetch(CANAL_REGISTROS_VERIFICACION_ID);
     const embedRegistro = new EmbedBuilder()
       .setColor(0x2ecc71)
@@ -550,8 +560,9 @@ async function procesarCallbackRoblox(code, state) {
       )
       .setTimestamp();
     await canalRegistros.send({ embeds: [embedRegistro] });
+    console.log('[verificacion] Listo, todo procesado.');
   } catch (err) {
-    console.error('No pude publicar en el canal de registros de verificación:', err);
+    console.error('No pude publicar en el canal de registros de verificación:', err.message);
   }
 
   return { ok: true, robloxUsername, discordId };
