@@ -539,14 +539,7 @@ async function procesarCallbackRoblox(code, state) {
     console.error('[verificacion] No se pudo mandar el DM (probablemente cerrados):', err.message);
   }
 
-  try {
-    if (process.env.ADMIN_CHANNEL_ID) {
-      const canalAdmin = await client.channels.fetch(process.env.ADMIN_CHANNEL_ID);
-      await canalAdmin.send(`🔗 <@${discordId}> se verificó como **${robloxUsername}** (ID: ${robloxId}).`);
-    }
-  } catch (err) {
-    console.error('[verificacion] Error avisando en ADMIN_CHANNEL_ID:', err.message);
-  }
+  // Nota: el aviso de verificación va solo al canal de registros (más abajo), no al de admins.
 
   try {
     console.log('[verificacion] Publicando en canal de registros...');
