@@ -11,10 +11,16 @@ const {
 const crypto = require('crypto');
 require('dotenv').config();
 
+const express = require('express');
+
 const PREGUNTAS = require('./preguntas');
 const postulacionesDB = require('./postulaciones');
+const verificacionDB = require('./verificacion');
+const robloxOAuth = require('./oauth');
 
 const ROL_ARBITRO_ID = '1526591280749084742';
+const ROL_VERIFICADO_ID = process.env.ROL_VERIFICADO_ID; // configurar en .env
+const CANAL_REGISTROS_VERIFICACION_ID = '1549624039327141898';
 
 const client = new Client({
   intents: [
@@ -418,6 +424,200 @@ async function manejarBotonPostulacion(interaction) {
 }
 
 // ═══════════════════════════════════════
+// VERIFICACIÓN DE ROBLOX (OAuth2 — "Iniciar sesión con Roblox")
+// Flujo: /verificar → el bot manda un botón-link a la página oficial de
+// login de Roblox → el usuario inicia sesión ahí (nunca en nuestro server)
+// → Roblox redirige a nuestro endpoint /auth/roblox/callback con un code
+// → lo canjeamos por los datos del usuario y quedan vinculados al instante.
+// ═══════════════════════════════════════
+
+async function manejarComandoVerificar(interaction) {
+  const discordId = interaction.user.id;
+
+  const existente = verificacionDB.getVerificacionPorDiscordId(discordId);
+  if (existente) {
+    return interaction.reply({
+      content: `✅ Ya tienes vinculada la cuenta de Roblox **${existente.robloxUsername}**. Si necesitas cambiarla, pide a un admin que use \`/verificar-reset\`.`,
+      ephemeral: true,
+    });
+  }
+
+  if (!process.env.ROBLOX_CLIENT_ID || !process.env.ROBLOX_REDIRECT_URI) {
+    return interaction.reply({
+      content: '❌ La verificación con Roblox todavía no está configurada en el bot (falta ROBLOX_CLIENT_ID/ROBLOX_REDIRECT_URI en el .env).',
+      ephemeral: true,
+    });
+  }
+
+  const link = robloxOAuth.crearLinkVerificacion(discordId);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('🔗 Verificación de cuenta — LFPP')
+    .setDescription(
+      'Presiona el botón de abajo para iniciar sesión con tu cuenta de **Roblox** (te lleva a la página oficial de Roblox, nunca vemos tu contraseña).\n\n' +
+      'Una vez que confirmes, tu Discord queda vinculado al instante — sin códigos ni cambiar tu perfil.\n\n' +
+      'El link expira en 10 minutos.'
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setLabel('Iniciar sesión con Roblox').setStyle(ButtonStyle.Link).setURL(link)
+  );
+
+  await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+}
+
+async function manejarComandoVerificarReset(interaction) {
+  if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: '🚫 Solo los admins pueden reiniciar una verificación.', ephemeral: true });
+  }
+
+  const usuario = interaction.options.getUser('usuario');
+  const existente = verificacionDB.getVerificacionPorDiscordId(usuario.id);
+  if (!existente) {
+    return interaction.reply({ content: `❌ <@${usuario.id}> no tiene ninguna cuenta de Roblox vinculada.`, ephemeral: true });
+  }
+
+  verificacionDB.eliminarVerificacion(usuario.id);
+  await interaction.reply({ content: `✅ Vínculo de <@${usuario.id}> con **${existente.robloxUsername}** eliminado. Ya puede usar \`/verificar\` de nuevo.`, ephemeral: true });
+}
+
+// Llamado desde el servidor Express cuando Roblox redirige de vuelta con el code.
+// Devuelve { ok, robloxUsername, discordId } o { ok:false, motivo }.
+async function procesarCallbackRoblox(code, state) {
+  const pendiente = robloxOAuth.resolverState(state);
+  if (!pendiente) return { ok: false, motivo: 'state_invalido' };
+  const { discordId } = pendiente;
+
+  const tokenData = await robloxOAuth.intercambiarCodigo(code);
+  const userinfo = await robloxOAuth.obtenerUserinfo(tokenData.access_token);
+  const robloxId = userinfo.sub;
+  const robloxUsername = userinfo.preferred_username || userinfo.name;
+
+  const ocupado = verificacionDB.getVerificacionPorRobloxId(robloxId);
+  if (ocupado && ocupado[0] !== discordId) {
+    return { ok: false, motivo: 'roblox_ya_vinculado', discordIdOcupante: ocupado[0] };
+  }
+
+  verificacionDB.guardarVerificacion(discordId, {
+    robloxId,
+    robloxUsername,
+    fechaVerificacion: new Date().toISOString(),
+  });
+
+  // Nickname + rol en el server
+  try {
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const member = await guild.members.fetch(discordId);
+
+    const nombreBase = member.displayName || member.user.username;
+    const sufijo = `(${robloxUsername})`;
+    // Discord limita los nicknames a 32 caracteres; recortamos el nombre base si hace falta
+    const espacioDisponible = 32 - sufijo.length;
+    const nombreRecortado = nombreBase.slice(0, Math.max(espacioDisponible, 0));
+    const nuevoNickname = `${nombreRecortado}${sufijo}`.slice(0, 32);
+
+    await member.setNickname(nuevoNickname).catch(() => {});
+    if (ROL_VERIFICADO_ID) await member.roles.add(ROL_VERIFICADO_ID).catch(() => {});
+  } catch (err) {
+    console.error('No pude poner nickname/rol de verificado:', err);
+  }
+
+  try {
+    const user = await client.users.fetch(discordId);
+    await user.send(`✅ ¡Listo! Tu Discord quedó vinculado a tu cuenta de Roblox **${robloxUsername}**.`);
+  } catch (err) {
+    // DMs cerrados, no bloqueante
+  }
+
+  try {
+    if (process.env.ADMIN_CHANNEL_ID) {
+      const canalAdmin = await client.channels.fetch(process.env.ADMIN_CHANNEL_ID);
+      await canalAdmin.send(`🔗 <@${discordId}> se verificó como **${robloxUsername}** (ID: ${robloxId}).`);
+    }
+  } catch (err) {
+    // no bloqueante
+  }
+
+  try {
+    const canalRegistros = await client.channels.fetch(CANAL_REGISTROS_VERIFICACION_ID);
+    const embedRegistro = new EmbedBuilder()
+      .setColor(0x2ecc71)
+      .setTitle('✅ Nueva verificación')
+      .addFields(
+        { name: 'Discord', value: `<@${discordId}>`, inline: true },
+        { name: 'Roblox', value: `${robloxUsername} (ID: ${robloxId})`, inline: true }
+      )
+      .setTimestamp();
+    await canalRegistros.send({ embeds: [embedRegistro] });
+  } catch (err) {
+    console.error('No pude publicar en el canal de registros de verificación:', err);
+  }
+
+  return { ok: true, robloxUsername, discordId };
+}
+
+// ═══════════════════════════════════════
+// SERVIDOR WEB (recibe el redirect de Roblox tras el login OAuth)
+// ═══════════════════════════════════════
+function iniciarServidorOAuth() {
+  const app = express();
+
+  app.get('/auth/roblox/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      return res.status(400).send('<h1>❌ Autorización cancelada</h1><p>Puedes cerrar esta pestaña y volver a intentar con /verificar.</p>');
+    }
+    if (!code || !state) {
+      return res.status(400).send('<h1>❌ Falta información en la redirección.</h1>');
+    }
+
+    try {
+      const resultado = await procesarCallbackRoblox(String(code), String(state));
+      if (!resultado.ok) {
+        const mensajes = {
+          state_invalido: 'El link expiró o ya fue usado. Vuelve a Discord y usa /verificar de nuevo.',
+          roblox_ya_vinculado: 'Esa cuenta de Roblox ya está vinculada a otro usuario de Discord.',
+        };
+        return res.status(400).send(`<h1>❌ No se pudo verificar</h1><p>${mensajes[resultado.motivo] || 'Error desconocido.'}</p>`);
+      }
+      return res.send(`<h1>✅ ¡Verificado!</h1><p>Tu Discord quedó vinculado a <b>${resultado.robloxUsername}</b>. Ya puedes cerrar esta pestaña y volver a Discord.</p>`);
+    } catch (err) {
+      console.error('Error procesando callback de Roblox OAuth:', err);
+      return res.status(500).send('<h1>❌ Error interno</h1><p>Intenta de nuevo desde /verificar en Discord.</p>');
+    }
+  });
+
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => console.log(`Servidor OAuth escuchando en el puerto ${port}`));
+}
+
+async function manejarComandoQuienEs(interaction) {
+  if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: '🚫 Solo los admins pueden usar este comando.', ephemeral: true });
+  }
+
+  const usuario = interaction.options.getUser('usuario');
+  const info = verificacionDB.getVerificacionPorDiscordId(usuario.id);
+
+  if (!info) {
+    return interaction.reply({ content: `❌ <@${usuario.id}> no tiene ninguna cuenta de Roblox vinculada.`, ephemeral: true });
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle('🔗 Vínculo de verificación')
+    .addFields(
+      { name: 'Discord', value: `<@${usuario.id}> (${usuario.tag})` },
+      { name: 'Roblox', value: `${info.robloxUsername} (ID: ${info.robloxId})` },
+      { name: 'Verificado el', value: new Date(info.fechaVerificacion).toLocaleString('es-PE') }
+    );
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+// ═══════════════════════════════════════
 // COMANDOS (cada embed se envía en su propio mensaje)
 // ═══════════════════════════════════════
 client.once('clientReady', () => console.log(`Bot conectado como ${client.user.tag}`));
@@ -426,6 +626,12 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === 'postular-arbitro') {
       await manejarComandoPostular(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'verificar') {
+      await manejarComandoVerificar(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'verificar-reset') {
+      await manejarComandoVerificarReset(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'quien-es') {
+      await manejarComandoQuienEs(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith('arb_')) {
       await manejarBotonPostulacion(interaction);
     }
@@ -455,4 +661,5 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+iniciarServidorOAuth();
 client.login(process.env.TOKEN);
