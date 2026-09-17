@@ -17,6 +17,8 @@ const PREGUNTAS = require('./preguntas');
 const postulacionesDB = require('./postulaciones');
 const verificacionDB = require('./verificacion');
 const robloxOAuth = require('./oauth');
+const mercadoCmds = require('./mercado-comandos');
+const musica = require('./musica');
 
 const ROL_ARBITRO_ID = '1526591280749084742';
 const ROL_VERIFICADO_ID = process.env.ROL_VERIFICADO_ID; // configurar en .env
@@ -28,6 +30,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildVoiceStates,
   ],
   partials: [Partials.Channel, Partials.Message], // necesario para recibir DMs de forma fiable
 });
@@ -624,7 +627,10 @@ async function manejarComandoQuienEs(interaction) {
 // ═══════════════════════════════════════
 // COMANDOS (cada embed se envía en su propio mensaje)
 // ═══════════════════════════════════════
-client.once('clientReady', () => console.log(`Bot conectado como ${client.user.tag}`));
+client.once('clientReady', () => {
+  console.log(`Bot conectado como ${client.user.tag}`);
+  musica.iniciarMusica(client);
+});
 
 client.on('interactionCreate', async (interaction) => {
   try {
@@ -638,6 +644,81 @@ client.on('interactionCreate', async (interaction) => {
       await manejarComandoQuienEs(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith('arb_')) {
       await manejarBotonPostulacion(interaction);
+
+    // ─── MERCADO ─────────────────────────────────────────
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'mercado-abrir') {
+      await mercadoCmds.cmdMercadoAbrir(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'mercado-cerrar') {
+      await mercadoCmds.cmdMercadoCerrar(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'registrar-club') {
+      await mercadoCmds.cmdRegistrarClub(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'asignar-presidente') {
+      await mercadoCmds.cmdAsignarPresidente(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'registrar-jugador') {
+      await mercadoCmds.cmdRegistrarJugador(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'actualizar-valor') {
+      await mercadoCmds.cmdActualizarValor(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'add-presupuesto') {
+      await mercadoCmds.cmdAddPresupuesto(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'bono-victoria') {
+      await mercadoCmds.cmdBonoVictoria(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'sancionar-jugador') {
+      await mercadoCmds.cmdSancionar(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'levantar-sancion') {
+      await mercadoCmds.cmdLevantarSancion(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'rescindir-forzar') {
+      await mercadoCmds.cmdRescindirForzar(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'ofrecer') {
+      await mercadoCmds.cmdOfrecer(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'prestar') {
+      await mercadoCmds.cmdPrestar(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'pagar-clausula') {
+      await mercadoCmds.cmdPagarClausula(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'mis-ofertas') {
+      await mercadoCmds.cmdMisOfertas(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'aceptar-oferta') {
+      await mercadoCmds.cmdResponderOfertaJugador(interaction, client, true);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'rechazar-oferta') {
+      await mercadoCmds.cmdResponderOfertaJugador(interaction, client, false);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'rescindir') {
+      await mercadoCmds.cmdRescindir(interaction, client);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'mi-contrato') {
+      await mercadoCmds.cmdMiContrato(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'plantilla') {
+      await mercadoCmds.cmdPlantilla(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'agentes-libres') {
+      await mercadoCmds.cmdAgentesLibres(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'valor-jugador') {
+      await mercadoCmds.cmdValorJugador(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'presupuesto') {
+      await mercadoCmds.cmdPresupuesto(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'mercado-estado') {
+      await mercadoCmds.cmdMercadoEstado(interaction);
+    } else if (interaction.isButton() && (
+      interaction.customId.startsWith('rescindir_') ||
+      interaction.customId.startsWith('clausula_') ||
+      interaction.customId.startsWith('club_') ||
+      interaction.customId.startsWith('jug_')
+    )) {
+      await mercadoCmds.manejarBotonMercado(interaction, client);
+
+    // ─── MÚSICA ─────────────────────────────────────────
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'play') {
+      await musica.cmdPlay(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'skip') {
+      await musica.cmdSkip(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'stop') {
+      await musica.cmdStop(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'pause') {
+      await musica.cmdPause(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'resume') {
+      await musica.cmdResume(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'queue') {
+      await musica.cmdQueue(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'volumen') {
+      await musica.cmdVolumen(interaction);
+    } else if (interaction.isChatInputCommand() && interaction.commandName === 'leave') {
+      await musica.cmdLeave(interaction);
     }
   } catch (err) {
     console.error('Error manejando interacción:', err);

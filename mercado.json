@@ -1,0 +1,17 @@
+{
+  "config": {
+    "ventanaAbierta": false,
+    "fechaApertura": null,
+    "fechaCierre": null,
+    "moneda": "Soles LFPP",
+    "presupuestoInicial": 500000,
+    "multiplicadorClausula": 2,
+    "bonoVictoria": 10000,
+    "bonoClasificacion": 50000
+  },
+  "clubes": {},
+  "jugadores": {},
+  "ofertas": {},
+  "movimientos": [],
+  "economia": {}
+}
