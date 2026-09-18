@@ -7,6 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   PermissionFlagsBits,
+  ActivityType,
 } = require('discord.js');
 const crypto = require('crypto');
 require('dotenv').config();
@@ -745,8 +746,36 @@ async function manejarComandoOwner(message) {
 // ═══════════════════════════════════════
 // EVENTOS
 // ═══════════════════════════════════════
+// ─── Custom Rich Presence (rotativo) ───
+function obtenerPresencias() {
+  const servidores = client.guilds.cache.size;
+  const usuarios = client.guilds.cache.reduce((acc, g) => acc + (g.memberCount || 0), 0);
+  return [
+    { name: '⚽ Bot Developing', type: ActivityType.Playing },
+    { name: `${usuarios} miembros`, type: ActivityType.Watching },
+    { name: 'partidos de la liga 🏟️', type: ActivityType.Watching },
+    { name: 'el mercado de fichajes 💰', type: ActivityType.Competing },
+    { name: `/play • ${servidores} servidores 🎵`, type: ActivityType.Listening },
+  ];
+}
+
+function iniciarPresencia() {
+  let i = 0;
+  const actualizar = () => {
+    const lista = obtenerPresencias();
+    client.user.setPresence({
+      status: 'online', // online | idle | dnd | invisible
+      activities: [lista[i % lista.length]],
+    });
+    i++;
+  };
+  actualizar();
+  setInterval(actualizar, 30 * 1000); // rota cada 30 segundos
+}
+
 client.once('clientReady', () => {
   console.log(`Bot conectado como ${client.user.tag}`);
+  iniciarPresencia();
 });
 
 client.on('interactionCreate', async (interaction) => {
