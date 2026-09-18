@@ -213,6 +213,14 @@ async function cmdPlay(interaction) {
     }
 
     if (!player.playing && !player.paused) {
+      const actual = player.queue.current;
+      console.log('🔍 DEBUG track a reproducir:', JSON.stringify({
+        title: actual?.title,
+        uri: actual?.uri,
+        tieneEncoded: !!actual?.track,
+        sourceName: actual?.sourceName,
+        realUri: actual?.realUri,
+      }));
       try {
         await player.play();
       } catch (playErr) {

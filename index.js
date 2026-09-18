@@ -630,6 +630,7 @@ async function manejarComandoOwner(message) {
     user: message.author,
     reply: (opts) => message.reply(typeof opts === 'string' ? opts : opts.content || { embeds: opts.embeds }),
     editReply: (opts) => message.reply(typeof opts === 'string' ? opts : opts.content || { embeds: opts.embeds }),
+    followUp: (opts) => message.reply(typeof opts === 'string' ? opts : opts.content || { embeds: opts.embeds }),
     deferReply: async () => {},
     options: {
       getString: (name) => {
