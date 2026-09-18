@@ -1,37 +1,55 @@
 // ═══════════════════════════════════════════════════════════════
 // musica.js — Sistema de música (YouTube, Spotify, SoundCloud, etc.)
-// Usa DisTube: detecta automáticamente de dónde viene el link
-// (o busca en YouTube si mandas solo texto/nombre de canción).
 // ═══════════════════════════════════════════════════════════════
 const { DisTube } = require('distube');
 const { YtDlpPlugin } = require('@distube/yt-dlp');
-const { SpotifyPlugin } = require('@distube/spotify');
 const { SoundCloudPlugin } = require('@distube/soundcloud');
 const { EmbedBuilder } = require('discord.js');
+const path = require('path');
+const fs = require('fs');
 
+// ─── Apunta ffmpeg-static al PATH para que DisTube lo encuentre ───
+try {
+  const ffmpegPath = require('ffmpeg-static');
+  const ffmpegDir = path.dirname(ffmpegPath);
+  process.env.PATH = ffmpegDir + path.delimiter + (process.env.PATH || '');
+  console.log('🎬 ffmpeg encontrado en:', ffmpegPath);
+} catch (e) {
+  console.warn('⚠️ ffmpeg-static no encontrado:', e.message);
+}
+
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
 const COLOR = { VERDE: 0x2ecc71, ROJO: 0xe74c3c, AZUL: 0x3498db, GRIS: 0x95a5a6 };
 
 let distube = null;
 
-// ─── Inicializa DisTube, se llama una sola vez desde index.js ─
 function iniciarMusica(client) {
   distube = new DisTube(client, {
     emitNewSongOnly: true,
     emitAddSongWhenCreatingQueue: false,
     emitAddListWhenCreatingQueue: false,
     plugins: [
-      new SpotifyPlugin(),      // links open.spotify.com/track|album|playlist
-      new SoundCloudPlugin(),   // links soundcloud.com
-      new YtDlpPlugin(),        // YouTube (links o búsqueda por texto) + fallback general
+      new SoundCloudPlugin(),
+      new YtDlpPlugin({
+        update: false,
+        ytdlpOptions: {
+          addHeader: [
+            'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept-Language:es-PE,es;q=0.9',
+          ],
+          ...(fs.existsSync(COOKIES_PATH) ? { cookies: COOKIES_PATH } : {}),
+        },
+      }),
     ],
   });
 
   distube
     .on('playSong', (queue, song) => {
+      console.log('▶️ playSong:', song.name, song.url);
       queue.textChannel?.send({ embeds: [embedReproduciendo(song)] });
     })
     .on('addSong', (queue, song) => {
-      // Solo avisa que se agregó si NO es la primera (esa la anuncia playSong)
+      console.log('➕ addSong:', song.name);
       if (queue.songs.length > 1) {
         queue.textChannel?.send({ embeds: [embedAgregado(song)] });
       }
@@ -46,11 +64,16 @@ function iniciarMusica(client) {
       queue.textChannel?.send({ embeds: [embedInfo('📭 Canal de voz vacío, saliendo.')] });
     })
     .on('error', (error, queue) => {
-      console.error('Error de DisTube:', error);
-      queue?.textChannel?.send({ embeds: [embedError('❌ Ocurrió un error al reproducir. Intenta con otro link/nombre.')] });
+      // Log completo del error para diagnóstico
+      console.error('❌ Error de DisTube (completo):', error);
+      console.error('❌ Mensaje:', error.message);
+      console.error('❌ Código:', error.errorCode || error.code || 'sin código');
+      if (error.cause) console.error('❌ Causa:', error.cause);
+      queue?.textChannel?.send({ embeds: [embedError(`❌ Error: ${error.message?.slice(0, 200) || 'desconocido'}`)] });
     });
 
-  console.log('🎵 Sistema de música (DisTube) inicializado.');
+  const tieneCookies = fs.existsSync(COOKIES_PATH);
+  console.log(`🎵 Sistema de música (DisTube) inicializado. Cookies: ${tieneCookies ? '✅ encontradas' : '⚠️ NO encontradas'}`);
 }
 
 // ─── EMBEDS ────────────────────────────────────────────────────
@@ -78,7 +101,28 @@ function embedError(msg) {
   return new EmbedBuilder().setColor(COLOR.ROJO).setDescription(msg);
 }
 
-// ─── HELPER: valida que el usuario esté en un canal de voz ────
+// ─── SPOTIFY ──────────────────────────────────────────────────
+async function resolverQuerySpotify(url) {
+  if (/open\.spotify\.com\/(playlist|album)\//i.test(url)) {
+    return { error: 'Por ahora solo soporto **canciones individuales** de Spotify. Prueba con el link de una canción específica, o busca el nombre directamente.' };
+  }
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
+    const html = await res.text();
+    const match = html.match(/<title>(.*?)<\/title>/i);
+    if (!match) return { error: null, query: url };
+    const limpio = match[1]
+      .replace(/\s*\|\s*Spotify\s*$/i, '')
+      .replace(/\s*-\s*song\s+by\s+/i, ' ')
+      .trim();
+    return { error: null, query: limpio || url };
+  } catch (err) {
+    console.error('Error resolviendo link de Spotify:', err);
+    return { error: null, query: url };
+  }
+}
+
+// ─── HELPER ───────────────────────────────────────────────────
 function requiereCanalDeVoz(interaction) {
   const canal = interaction.member?.voice?.channel;
   if (!canal) {
@@ -92,15 +136,24 @@ function requiereCanalDeVoz(interaction) {
 // COMANDOS
 // ═══════════════════════════════════════════════════════════════
 
-// /play <busqueda> — Acepta link de YouTube, Spotify, SoundCloud o texto libre
 async function cmdPlay(interaction) {
   const canalVoz = requiereCanalDeVoz(interaction);
   if (!canalVoz) return;
 
-  const query = interaction.options.getString('busqueda');
+  let query = interaction.options.getString('busqueda');
+  console.log('🔎 cmdPlay query:', query);
   await interaction.deferReply();
 
+  if (/open\.spotify\.com\//i.test(query)) {
+    const resuelto = await resolverQuerySpotify(query);
+    if (resuelto.error) {
+      return interaction.editReply({ embeds: [embedError(resuelto.error)] });
+    }
+    query = resuelto.query;
+  }
+
   try {
+    console.log('🎵 Llamando distube.play con query:', query);
     await distube.play(canalVoz, query, {
       textChannel: interaction.channel,
       member: interaction.member,
@@ -112,7 +165,6 @@ async function cmdPlay(interaction) {
   }
 }
 
-// /skip
 async function cmdSkip(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
@@ -125,7 +177,6 @@ async function cmdSkip(interaction) {
   }
 }
 
-// /stop
 async function cmdStop(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
@@ -133,7 +184,6 @@ async function cmdStop(interaction) {
   await interaction.reply({ embeds: [embedInfo('⏹️ Música detenida y cola vaciada.')] });
 }
 
-// /pause
 async function cmdPause(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
@@ -141,7 +191,6 @@ async function cmdPause(interaction) {
   await interaction.reply({ embeds: [embedInfo('⏸️ Pausado.')] });
 }
 
-// /resume
 async function cmdResume(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
@@ -149,7 +198,6 @@ async function cmdResume(interaction) {
   await interaction.reply({ embeds: [embedInfo('▶️ Reanudado.')] });
 }
 
-// /queue — ver la cola actual
 async function cmdQueue(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue || !queue.songs.length) {
@@ -164,7 +212,6 @@ async function cmdQueue(interaction) {
   });
 }
 
-// /volumen <1-100>
 async function cmdVolumen(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
@@ -173,7 +220,6 @@ async function cmdVolumen(interaction) {
   await interaction.reply({ embeds: [embedInfo(`🔊 Volumen ajustado a ${vol}%.`)] });
 }
 
-// /leave — saca al bot del canal de voz
 async function cmdLeave(interaction) {
   const queue = distube.getQueue(interaction.guildId);
   if (!queue) return interaction.reply({ embeds: [embedError('📭 No estoy en ningún canal de voz.')], ephemeral: true });

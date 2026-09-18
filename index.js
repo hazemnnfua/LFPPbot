@@ -24,6 +24,9 @@ const ROL_ARBITRO_ID = '1526591280749084742';
 const ROL_VERIFICADO_ID = process.env.ROL_VERIFICADO_ID; // configurar en .env
 const CANAL_REGISTROS_VERIFICACION_ID = '1549624039327141898';
 
+// ─── ID del dueño del bot — puede usar comandos con prefijo § en cualquier servidor ───
+const OWNER_ID = '720788058684784691';
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -216,13 +219,9 @@ function sleep(ms) {
 
 // ═══════════════════════════════════════
 // POSTULACIÓN A ÁRBITRO
-// Flujo: /postular-arbitro (en el server) → el bot entrevista por DM,
-// pregunta por pregunta → arma un embed y lo postea en el canal de admins
-// con botones para Aceptar / Rechazar / Citar a entrevista.
 // ═══════════════════════════════════════
 
 function limpiarTextoPregunta(p) {
-  // quita el emoji numerado del principio para usarlo como nombre de campo en el embed
   return p.replace(/^[0-9️⃣]+\s*/u, '');
 }
 
@@ -240,7 +239,6 @@ async function manejarComandoPostular(interaction) {
     }
   } catch (err) {
     console.error('No pude verificar el rol de árbitro del usuario antes de postular:', err);
-    // si falla la verificación seguimos igual, no queremos bloquear postulaciones legítimas por un error de red
   }
 
   const restriccion = postulacionesDB.obtenerRestriccion(userId);
@@ -275,8 +273,6 @@ async function manejarComandoPostular(interaction) {
     });
   }
 
-  // Respondemos la interacción YA (Discord da solo 3 segundos) y recién después
-  // seguimos con el envío del DM y la entrevista, que puede tardar minutos.
   await interaction.reply({ content: '📬 Te envié las preguntas por DM. Revisa tu privado para completar la postulación.', ephemeral: true });
 
   try {
@@ -406,7 +402,7 @@ async function manejarBotonPostulacion(interaction) {
     const user = await client.users.fetch(postulacion.userId);
     await user.send(mensajesDM[accion]);
   } catch (err) {
-    // El candidato puede tener los DMs cerrados — no bloqueamos el flujo por eso.
+    // DMs cerrados
   }
 
   const colores = { aceptada: 0x2ecc71, rechazada: 0xe74c3c, 'en entrevista': 0xf39c12 };
@@ -415,8 +411,6 @@ async function manejarBotonPostulacion(interaction) {
     .setColor(colores[nuevoEstado])
     .setFooter({ text: `${nuevoEstado.toUpperCase()} por ${interaction.user.tag}` });
 
-  // Aceptar/Rechazar son finales → deshabilitamos los botones.
-  // "Citar a entrevista" deja los botones activos por si luego hay que aceptar/rechazar.
   const esFinal = accion === 'aceptar' || accion === 'rechazar';
   const filaOriginal = interaction.message.components[0];
   const nuevaFila = new ActionRowBuilder().addComponents(
@@ -427,11 +421,7 @@ async function manejarBotonPostulacion(interaction) {
 }
 
 // ═══════════════════════════════════════
-// VERIFICACIÓN DE ROBLOX (OAuth2 — "Iniciar sesión con Roblox")
-// Flujo: /verificar → el bot manda un botón-link a la página oficial de
-// login de Roblox → el usuario inicia sesión ahí (nunca en nuestro server)
-// → Roblox redirige a nuestro endpoint /auth/roblox/callback con un code
-// → lo canjeamos por los datos del usuario y quedan vinculados al instante.
+// VERIFICACIÓN DE ROBLOX
 // ═══════════════════════════════════════
 
 async function manejarComandoVerificar(interaction) {
@@ -485,8 +475,6 @@ async function manejarComandoVerificarReset(interaction) {
   await interaction.reply({ content: `✅ Vínculo de <@${usuario.id}> con **${existente.robloxUsername}** eliminado. Ya puede usar \`/verificar\` de nuevo.`, ephemeral: true });
 }
 
-// Llamado desde el servidor Express cuando Roblox redirige de vuelta con el code.
-// Devuelve { ok, robloxUsername, discordId } o { ok:false, motivo }.
 async function procesarCallbackRoblox(code, state) {
   console.log('[verificacion] Callback recibido, resolviendo state...');
   const pendiente = robloxOAuth.resolverState(state);
@@ -513,7 +501,6 @@ async function procesarCallbackRoblox(code, state) {
   });
   console.log('[verificacion] Guardado en verificaciones.json');
 
-  // Nickname + rol en el server
   try {
     console.log('[verificacion] Buscando guild y member para nickname/rol...');
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
@@ -521,7 +508,6 @@ async function procesarCallbackRoblox(code, state) {
 
     const nombreBase = member.displayName || member.user.username;
     const sufijo = `(${robloxUsername})`;
-    // Discord limita los nicknames a 32 caracteres; recortamos el nombre base si hace falta
     const espacioDisponible = 32 - sufijo.length;
     const nombreRecortado = nombreBase.slice(0, Math.max(espacioDisponible, 0));
     const nuevoNickname = `${nombreRecortado}${sufijo}`.slice(0, 32);
@@ -538,11 +524,8 @@ async function procesarCallbackRoblox(code, state) {
     const user = await client.users.fetch(discordId);
     await user.send(`✅ ¡Listo! Tu Discord quedó vinculado a tu cuenta de Roblox **${robloxUsername}**.`);
   } catch (err) {
-    // DMs cerrados, no bloqueante
     console.error('[verificacion] No se pudo mandar el DM (probablemente cerrados):', err.message);
   }
-
-  // Nota: el aviso de verificación va solo al canal de registros (más abajo), no al de admins.
 
   try {
     console.log('[verificacion] Publicando en canal de registros...');
@@ -565,7 +548,7 @@ async function procesarCallbackRoblox(code, state) {
 }
 
 // ═══════════════════════════════════════
-// SERVIDOR WEB (recibe el redirect de Roblox tras el login OAuth)
+// SERVIDOR WEB (OAuth)
 // ═══════════════════════════════════════
 function iniciarServidorOAuth() {
   const app = express();
@@ -625,7 +608,115 @@ async function manejarComandoQuienEs(interaction) {
 }
 
 // ═══════════════════════════════════════
-// COMANDOS (cada embed se envía en su propio mensaje)
+// COMANDOS DE OWNER CON PREFIJO §
+// Solo funcionan si el mensaje lo envía el OWNER_ID
+// Uso: §play <busqueda>, §skip, §stop, §pause, §resume, §queue, §leave
+//      §volumen <1-100>
+//      §mercado-abrir, §mercado-cerrar, §registrar-club <nombre>
+//      §reglas-general, §reglas-partido, §reglas-mercado, §reglas-clubes
+// ═══════════════════════════════════════
+async function manejarComandoOwner(message) {
+  if (message.author.id !== OWNER_ID) return;
+  const contenido = message.content.slice(1).trim(); // quita el §
+  const [cmd, ...args] = contenido.split(' ');
+  const arg = args.join(' ');
+
+  // Simula un objeto interaction mínimo para reutilizar las funciones existentes
+  const fakeInteraction = {
+    guildId: message.guild.id,
+    guild: message.guild,
+    member: message.member,
+    channel: message.channel,
+    user: message.author,
+    reply: (opts) => message.reply(typeof opts === 'string' ? opts : opts.content || { embeds: opts.embeds }),
+    editReply: (opts) => message.reply(typeof opts === 'string' ? opts : opts.content || { embeds: opts.embeds }),
+    deferReply: async () => {},
+    options: {
+      getString: (name) => {
+        if (name === 'busqueda') return arg || null;
+        if (name === 'nombre') return arg || null;
+        if (name === 'club') return arg || null;
+        return arg || null;
+      },
+      getInteger: (name) => {
+        if (name === 'nivel') return parseInt(arg) || null;
+        if (name === 'monto') return parseInt(arg) || null;
+        return parseInt(arg) || null;
+      },
+      getUser: () => null,
+    },
+  };
+
+  switch (cmd.toLowerCase()) {
+    // ─── MÚSICA ───────────────────────────────────────────────
+    case 'play':
+      if (!arg) return message.reply('❌ Uso: `§play <nombre o link>`');
+      await musica.cmdPlay(fakeInteraction);
+      break;
+    case 'skip':
+      await musica.cmdSkip(fakeInteraction);
+      break;
+    case 'stop':
+      await musica.cmdStop(fakeInteraction);
+      break;
+    case 'pause':
+      await musica.cmdPause(fakeInteraction);
+      break;
+    case 'resume':
+      await musica.cmdResume(fakeInteraction);
+      break;
+    case 'queue':
+      await musica.cmdQueue(fakeInteraction);
+      break;
+    case 'leave':
+      await musica.cmdLeave(fakeInteraction);
+      break;
+    case 'volumen':
+      if (!arg || isNaN(parseInt(arg))) return message.reply('❌ Uso: `§volumen <1-100>`');
+      await musica.cmdVolumen(fakeInteraction);
+      break;
+
+    // ─── REGLAS ───────────────────────────────────────────────
+    case 'reglas-general': {
+      const embeds = embedsGeneral();
+      for (const e of embeds) { await message.channel.send({ embeds: [e] }); await sleep(500); }
+      break;
+    }
+    case 'reglas-partido': {
+      const embeds = embedsPartido();
+      for (const e of embeds) { await message.channel.send({ embeds: [e] }); await sleep(500); }
+      break;
+    }
+    case 'reglas-mercado': {
+      const embeds = embedsMercado();
+      for (const e of embeds) { await message.channel.send({ embeds: [e] }); await sleep(500); }
+      break;
+    }
+    case 'reglas-clubes': {
+      const embeds = embedsClubes();
+      for (const e of embeds) { await message.channel.send({ embeds: [e] }); await sleep(500); }
+      break;
+    }
+
+    // ─── MERCADO ──────────────────────────────────────────────
+    case 'mercado-abrir':
+      await mercadoCmds.cmdMercadoAbrir(fakeInteraction, client);
+      break;
+    case 'mercado-cerrar':
+      await mercadoCmds.cmdMercadoCerrar(fakeInteraction, client);
+      break;
+    case 'mercado-estado':
+      await mercadoCmds.cmdMercadoEstado(fakeInteraction);
+      break;
+
+    default:
+      // comando desconocido — ignorar silenciosamente
+      break;
+  }
+}
+
+// ═══════════════════════════════════════
+// EVENTOS
 // ═══════════════════════════════════════
 client.once('clientReady', () => {
   console.log(`Bot conectado como ${client.user.tag}`);
@@ -727,7 +818,15 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
-  if (!message.guild) return; // ignora DMs (ej. respuestas de la entrevista de árbitro)
+  if (!message.guild) return;
+
+  // ─── Comandos de owner con prefijo § ───────────────────────
+  if (message.content.startsWith('§') && message.author.id === OWNER_ID) {
+    await manejarComandoOwner(message);
+    return;
+  }
+
+  // ─── Comandos de reglas para admins con prefijo ! ──────────
   if (!message.member.permissions.has('Administrator')) return;
 
   const cmds = {
@@ -741,7 +840,7 @@ client.on('messageCreate', async (message) => {
     const embeds = cmds[message.content]();
     for (const embed of embeds) {
       await message.channel.send({ embeds: [embed] });
-      await sleep(500); // evita rate limit de Discord
+      await sleep(500);
     }
   }
 });
