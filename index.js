@@ -720,7 +720,6 @@ async function manejarComandoOwner(message) {
 // ═══════════════════════════════════════
 client.once('clientReady', () => {
   console.log(`Bot conectado como ${client.user.tag}`);
-  musica.iniciarMusica(client);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -846,4 +845,5 @@ client.on('messageCreate', async (message) => {
 });
 
 iniciarServidorOAuth();
+musica.iniciarMusica(client);
 client.login(process.env.TOKEN);
