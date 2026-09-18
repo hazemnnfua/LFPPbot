@@ -20,6 +20,7 @@ function iniciarMusica(client) {
   if (!process.env.LAVALINK_HOST || !process.env.LAVALINK_PORT || !process.env.LAVALINK_PASSWORD) {
     console.warn('⚠️ Faltan variables LAVALINK_HOST / LAVALINK_PORT / LAVALINK_PASSWORD en el .env — la música no va a funcionar hasta configurarlas.');
   }
+  console.log('🔍 DEBUG Lavalink host:', process.env.LAVALINK_HOST, '| puerto:', process.env.LAVALINK_PORT, '| secure:', process.env.LAVALINK_SECURE, '| password largo:', (process.env.LAVALINK_PASSWORD || '').length);
 
   const nodes = [
     {
