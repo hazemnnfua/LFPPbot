@@ -1,98 +1,105 @@
 // ═══════════════════════════════════════════════════════════════
 // musica.js — Sistema de música (YouTube, Spotify, SoundCloud, etc.)
+// Usa Kazagumo + Shoukaku (Lavalink) en vez de conexión UDP directa,
+// porque Railway bloquea/rompe el UDP de voz de Discord cuando el bot
+// se conecta directo (VOICE_CONNECT_FAILED). Lavalink corre como
+// servicio aparte y es quien habla UDP con Discord.
 // ═══════════════════════════════════════════════════════════════
-const { DisTube } = require('distube');
-const { YtDlpPlugin } = require('@distube/yt-dlp');
-const { SoundCloudPlugin } = require('@distube/soundcloud');
+const { Kazagumo } = require('kazagumo');
+const { Connectors } = require('shoukaku');
 const { EmbedBuilder } = require('discord.js');
-const path = require('path');
-const fs = require('fs');
 
-// ─── Apunta ffmpeg-static al PATH para que DisTube lo encuentre ───
-try {
-  const ffmpegPath = require('ffmpeg-static');
-  const ffmpegDir = path.dirname(ffmpegPath);
-  process.env.PATH = ffmpegDir + path.delimiter + (process.env.PATH || '');
-  console.log('🎬 ffmpeg encontrado en:', ffmpegPath);
-} catch (e) {
-  console.warn('⚠️ ffmpeg-static no encontrado:', e.message);
-}
-
-const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
 const COLOR = { VERDE: 0x2ecc71, ROJO: 0xe74c3c, AZUL: 0x3498db, GRIS: 0x95a5a6 };
 
-let distube = null;
+let kazagumo = null;
+let discordClient = null;
 
 function iniciarMusica(client) {
-  distube = new DisTube(client, {
-    emitNewSongOnly: true,
-    emitAddSongWhenCreatingQueue: false,
-    emitAddListWhenCreatingQueue: false,
-    plugins: [
-      new SoundCloudPlugin(),
-      new YtDlpPlugin({
-        update: false,
-        ytdlpOptions: {
-          addHeader: [
-            'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-            'Accept-Language:es-PE,es;q=0.9',
-          ],
-          ...(fs.existsSync(COOKIES_PATH) ? { cookies: COOKIES_PATH } : {}),
-        },
-      }),
-    ],
-  });
+  discordClient = client;
 
-  distube
-    .on('playSong', (queue, song) => {
-      console.log('▶️ playSong:', song.name, song.url);
-      queue.textChannel?.send({ embeds: [embedReproduciendo(song)] });
+  if (!process.env.LAVALINK_HOST || !process.env.LAVALINK_PORT || !process.env.LAVALINK_PASSWORD) {
+    console.warn('⚠️ Faltan variables LAVALINK_HOST / LAVALINK_PORT / LAVALINK_PASSWORD en el .env — la música no va a funcionar hasta configurarlas.');
+  }
+
+  const nodes = [
+    {
+      name: 'main',
+      url: `${process.env.LAVALINK_HOST}:${process.env.LAVALINK_PORT}`,
+      auth: process.env.LAVALINK_PASSWORD || 'youshallnotpass',
+      secure: process.env.LAVALINK_SECURE === 'true',
+    },
+  ];
+
+  kazagumo = new Kazagumo(
+    {
+      defaultSearchEngine: 'youtube',
+      send: (guildId, payload) => {
+        const guild = client.guilds.cache.get(guildId);
+        if (guild) guild.shard.send(payload);
+      },
+    },
+    new Connectors.DiscordJS(client),
+    nodes,
+    { moveOnDisconnect: false, resume: false, reconnectTries: 3, restTimeout: 15000 }
+  );
+
+  kazagumo.shoukaku.on('ready', (name) => console.log(`🎵 Nodo Lavalink "${name}" conectado.`));
+  kazagumo.shoukaku.on('error', (name, error) => console.error(`❌ Error en nodo Lavalink "${name}":`, error?.message || error));
+  kazagumo.shoukaku.on('close', (name, code, reason) => console.warn(`⚠️ Nodo Lavalink "${name}" cerrado (${code}): ${reason}`));
+  kazagumo.shoukaku.on('disconnect', (name) => console.warn(`⚠️ Nodo Lavalink "${name}" desconectado.`));
+
+  kazagumo
+    .on('playerStart', (player, track) => {
+      console.log('▶️ playerStart:', track.title, track.uri);
+      const canal = discordClient.channels.cache.get(player.textId);
+      canal?.send({ embeds: [embedReproduciendo(track)] });
     })
-    .on('addSong', (queue, song) => {
-      console.log('➕ addSong:', song.name);
-      if (queue.songs.length > 1) {
-        queue.textChannel?.send({ embeds: [embedAgregado(song)] });
-      }
+    .on('playerEmpty', (player) => {
+      const canal = discordClient.channels.cache.get(player.textId);
+      canal?.send({ embeds: [embedInfo('🏁 Cola terminada. Saliendo del canal de voz.')] });
+      player.destroy();
     })
-    .on('finish', (queue) => {
-      queue.textChannel?.send({ embeds: [embedInfo('🏁 Cola terminada. Saliendo del canal de voz.')] });
+    .on('playerException', (player, data) => {
+      console.error('❌ Error de Lavalink (playerException):', data);
+      const canal = discordClient.channels.cache.get(player.textId);
+      canal?.send({ embeds: [embedError(`❌ Error reproduciendo: ${data?.exception?.message?.slice(0, 200) || 'desconocido'}`)] });
     })
-    .on('disconnect', (queue) => {
-      queue.textChannel?.send({ embeds: [embedInfo('👋 Desconectado del canal de voz.')] });
-    })
-    .on('empty', (queue) => {
-      queue.textChannel?.send({ embeds: [embedInfo('📭 Canal de voz vacío, saliendo.')] });
-    })
-    .on('error', (error, queue) => {
-      // Log completo del error para diagnóstico
-      console.error('❌ Error de DisTube (completo):', error);
-      console.error('❌ Mensaje:', error.message);
-      console.error('❌ Código:', error.errorCode || error.code || 'sin código');
-      if (error.cause) console.error('❌ Causa:', error.cause);
-      queue?.textChannel?.send({ embeds: [embedError(`❌ Error: ${error.message?.slice(0, 200) || 'desconocido'}`)] });
+    .on('playerClosed', (player, data) => {
+      console.warn('⚠️ Conexión de voz cerrada (playerClosed):', data);
     });
 
-  const tieneCookies = fs.existsSync(COOKIES_PATH);
-  console.log(`🎵 Sistema de música (DisTube) inicializado. Cookies: ${tieneCookies ? '✅ encontradas' : '⚠️ NO encontradas'}`);
+  console.log('🎵 Sistema de música (Kazagumo/Lavalink) inicializado.');
+}
+
+// ─── utilidades ───────────────────────────────────────────────
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return 'En vivo';
+  const totalSeg = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeg / 3600);
+  const m = Math.floor((totalSeg % 3600) / 60);
+  const s = totalSeg % 60;
+  const mm = String(m).padStart(h ? 2 : 1, '0');
+  const ss = String(s).padStart(2, '0');
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 // ─── EMBEDS ────────────────────────────────────────────────────
-function embedReproduciendo(song) {
+function embedReproduciendo(track) {
   return new EmbedBuilder()
     .setColor(COLOR.VERDE)
     .setTitle('🎶 Reproduciendo ahora')
-    .setDescription(`**[${song.name}](${song.url})**`)
+    .setDescription(`**[${track.title}](${track.uri})**`)
     .addFields(
-      { name: 'Duración', value: song.formattedDuration || 'En vivo', inline: true },
-      { name: 'Pedido por', value: `${song.user}`, inline: true },
-      { name: 'Fuente', value: song.source || 'desconocida', inline: true },
+      { name: 'Duración', value: formatDuration(track.length), inline: true },
+      { name: 'Pedido por', value: `${track.requester}`, inline: true },
+      { name: 'Fuente', value: track.sourceName || 'desconocida', inline: true },
     )
-    .setThumbnail(song.thumbnail || null);
+    .setThumbnail(track.thumbnail || null);
 }
-function embedAgregado(song) {
+function embedAgregado(track) {
   return new EmbedBuilder()
     .setColor(COLOR.AZUL)
-    .setDescription(`➕ Añadido a la cola: **[${song.name}](${song.url})** (${song.formattedDuration || 'en vivo'})`);
+    .setDescription(`➕ Añadido a la cola: **[${track.title}](${track.uri})** (${formatDuration(track.length)})`);
 }
 function embedInfo(msg) {
   return new EmbedBuilder().setColor(COLOR.GRIS).setDescription(msg);
@@ -153,12 +160,37 @@ async function cmdPlay(interaction) {
   }
 
   try {
-    console.log('🎵 Llamando distube.play con query:', query);
-    await distube.play(canalVoz, query, {
-      textChannel: interaction.channel,
-      member: interaction.member,
-    });
-    await interaction.editReply({ embeds: [embedInfo(`🔎 Buscando: **${query}**...`)] });
+    console.log('🎵 Buscando en Lavalink:', query);
+
+    let player = kazagumo.players.get(interaction.guildId);
+    if (!player) {
+      player = await kazagumo.createPlayer({
+        guildId: interaction.guildId,
+        textId: interaction.channel.id,
+        voiceId: canalVoz.id,
+        volume: 100,
+      });
+    }
+
+    const result = await kazagumo.search(query, { requester: interaction.member.user.tag });
+    if (!result || !result.tracks.length) {
+      return interaction.editReply({ embeds: [embedError('❌ No pude encontrar o reproducir eso. Verifica el link o intenta con otro nombre.')] });
+    }
+
+    if (result.type === 'PLAYLIST') {
+      for (const track of result.tracks) player.queue.add(track);
+      await interaction.editReply({ embeds: [embedInfo(`📃 Añadida playlist **${result.playlistName || query}** (${result.tracks.length} canciones).`)] });
+    } else {
+      const track = result.tracks[0];
+      player.queue.add(track);
+      if (player.playing || player.queue.length > 1) {
+        await interaction.editReply({ embeds: [embedAgregado(track)] });
+      } else {
+        await interaction.editReply({ embeds: [embedInfo(`🔎 Reproduciendo: **${track.title}**...`)] });
+      }
+    }
+
+    if (!player.playing && !player.paused) player.play();
   } catch (err) {
     console.error('Error en /play:', err);
     await interaction.editReply({ embeds: [embedError('❌ No pude encontrar o reproducir eso. Verifica el link o intenta con otro nombre.')] });
@@ -166,46 +198,44 @@ async function cmdPlay(interaction) {
 }
 
 async function cmdSkip(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
-  try {
-    const siguiente = queue.songs[1];
-    await queue.skip();
-    await interaction.reply({ embeds: [embedInfo(siguiente ? `⏭️ Saltado. Ahora suena: **${siguiente.name}**` : '⏭️ Saltado.')] });
-  } catch (err) {
-    await interaction.reply({ embeds: [embedError('❌ No hay más canciones en la cola para saltar.')], ephemeral: true });
-  }
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player || !player.queue.current) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
+  const siguiente = player.queue[0];
+  player.skip();
+  await interaction.reply({ embeds: [embedInfo(siguiente ? `⏭️ Saltado. Ahora suena: **${siguiente.title}**` : '⏭️ Saltado.')] });
 }
 
 async function cmdStop(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
-  await queue.stop();
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
+  player.queue.clear();
+  player.destroy();
   await interaction.reply({ embeds: [embedInfo('⏹️ Música detenida y cola vaciada.')] });
 }
 
 async function cmdPause(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
-  queue.pause();
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
+  player.pause(true);
   await interaction.reply({ embeds: [embedInfo('⏸️ Pausado.')] });
 }
 
 async function cmdResume(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
-  queue.resume();
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
+  player.pause(false);
   await interaction.reply({ embeds: [embedInfo('▶️ Reanudado.')] });
 }
 
 async function cmdQueue(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue || !queue.songs.length) {
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player || (!player.queue.current && !player.queue.length)) {
     return interaction.reply({ embeds: [embedError('📭 La cola está vacía.')], ephemeral: true });
   }
-  const lista = queue.songs
+  const items = [player.queue.current, ...player.queue].filter(Boolean);
+  const lista = items
     .slice(0, 15)
-    .map((s, i) => `${i === 0 ? '▶️' : `${i}.`} **${s.name}** — ${s.formattedDuration || 'en vivo'}`)
+    .map((t, i) => `${i === 0 ? '▶️' : `${i}.`} **${t.title}** — ${formatDuration(t.length)}`)
     .join('\n');
   await interaction.reply({
     embeds: [new EmbedBuilder().setColor(COLOR.AZUL).setTitle('🎼 Cola de reproducción').setDescription(lista)],
@@ -213,17 +243,17 @@ async function cmdQueue(interaction) {
 }
 
 async function cmdVolumen(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player) return interaction.reply({ embeds: [embedError('📭 No hay nada sonando.')], ephemeral: true });
   const vol = interaction.options.getInteger('nivel');
-  queue.setVolume(vol);
+  player.setVolume(vol);
   await interaction.reply({ embeds: [embedInfo(`🔊 Volumen ajustado a ${vol}%.`)] });
 }
 
 async function cmdLeave(interaction) {
-  const queue = distube.getQueue(interaction.guildId);
-  if (!queue) return interaction.reply({ embeds: [embedError('📭 No estoy en ningún canal de voz.')], ephemeral: true });
-  await queue.stop();
+  const player = kazagumo.players.get(interaction.guildId);
+  if (!player) return interaction.reply({ embeds: [embedError('📭 No estoy en ningún canal de voz.')], ephemeral: true });
+  player.destroy();
   await interaction.reply({ embeds: [embedInfo('👋 Saliendo del canal de voz.')] });
 }
 
