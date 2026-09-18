@@ -20,6 +20,9 @@ const verificacionDB = require('./verificacion');
 const robloxOAuth = require('./oauth');
 const mercadoCmds = require('./mercado-comandos');
 const musica = require('./musica');
+const { iniciarModeracion, manejarComandoPrefijo: moderacionPrefijo } = require('./moderacion');
+const utilidades = require('./utilidades');
+const panel = require('./panel');
 
 const ROL_ARBITRO_ID = '1526591280749084742';
 const ROL_VERIFICADO_ID = process.env.ROL_VERIFICADO_ID; // configurar en .env
@@ -53,6 +56,9 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildModeration, // eventos de ban/unban manual (logs de moderación)
+    GatewayIntentBits.GuildMembers, // ← PRIVILEGIADO: actívalo en el Portal de Desarrolladores.
+                                    //    Necesario para bienvenida, despedida y autorol.
   ],
   partials: [Partials.Channel, Partials.Message], // necesario para recibir DMs de forma fiable
 });
@@ -638,13 +644,22 @@ async function manejarComandoQuienEs(interaction) {
 //     El resto (reglas, mercado) sigue siendo solo para el OWNER_ID. ───
 const MUSICA_COMANDOS_PREFIJO = new Set(['play', 'skip', 'stop', 'pause', 'resume', 'queue', 'leave', 'volumen']);
 
+// Comandos que quedan reservados exclusivamente al dueño del bot
+const SOLO_OWNER_PREFIJO = new Set([
+  'reglas-general', 'reglas-partido', 'reglas-mercado', 'reglas-clubes',
+  'mercado-abrir', 'mercado-cerrar', 'mercado-estado',
+]);
+
 async function manejarComandoOwner(message) {
   const contenido = message.content.slice(1).trim(); // quita el §
   const [cmd, ...args] = contenido.split(' ');
-  const esMusica = MUSICA_COMANDOS_PREFIJO.has(cmd.toLowerCase());
+  const nombre = (cmd || '').toLowerCase();
+  const esMusica = MUSICA_COMANDOS_PREFIJO.has(nombre);
 
-  // Los comandos que no son de música siguen restringidos al dueño del bot
-  if (!esMusica && message.author.id !== OWNER_ID) return;
+  // Reglas y mercado siguen restringidos al dueño del bot.
+  // La moderación se filtra dentro de moderacion.js (dueño o admin del servidor).
+  if (SOLO_OWNER_PREFIJO.has(nombre) && message.author.id !== OWNER_ID) return;
+  if (!esMusica && !SOLO_OWNER_PREFIJO.has(nombre) && !message.guild) return;
 
   const arg = args.join(' ');
 
@@ -737,9 +752,28 @@ async function manejarComandoOwner(message) {
       await mercadoCmds.cmdMercadoEstado(fakeInteraction);
       break;
 
-    default:
-      // comando desconocido — ignorar silenciosamente
+    default: {
+      // El dueño del bot puede usar TODOS los comandos con § en cualquier
+      // servidor; los demás solo si tienen el permiso correspondiente.
+      const opciones = { esOwnerBot: message.author.id === OWNER_ID };
+
+      // ─── PANEL (§panel) ───
+      if (nombre === 'panel' || nombre === 'configurar') {
+        if (!opciones.esOwnerBot && !message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+          await message.reply('❌ Necesitas el permiso **Gestionar servidor** para abrir el panel.').catch(() => {});
+          break;
+        }
+        await message.reply('⚙️ Abre el panel con `/panel` (los menús y botones solo funcionan por slash).').catch(() => {});
+        break;
+      }
+
+      // ─── UTILIDADES (§avatar, §serverinfo, §rank, §lock, §sorteo…) ───
+      if (await utilidades.manejarPrefijo(message, nombre, args, opciones)) break;
+
+      // ─── MODERACIÓN (§ban §kick §timeout §warn §clear §modconfig…) ───
+      await moderacionPrefijo(message, nombre, args, opciones);
       break;
+    }
   }
 }
 
@@ -791,6 +825,18 @@ client.on('interactionCreate', async (interaction) => {
         ephemeral: true,
       });
     }
+
+    // ─── PANEL DE CONFIGURACIÓN (/panel + sus botones, menús y modales) ───
+    if (
+      (interaction.isChatInputCommand() && interaction.commandName === 'panel') ||
+      ((interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit()) &&
+        interaction.customId?.startsWith('panel_'))
+    ) {
+      if (await panel.manejarPanel(interaction, OWNER_ID)) return;
+    }
+
+    // ─── UTILIDADES (info, herramientas, gestión, niveles, diversión) ───
+    if (interaction.isChatInputCommand() && (await utilidades.manejarSlash(interaction))) return;
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'postular-arbitro') {
       await manejarComandoPostular(interaction);
@@ -914,4 +960,6 @@ client.on('messageCreate', async (message) => {
 
 iniciarServidorOAuth();
 musica.iniciarMusica(client);
+iniciarModeracion(client);
+utilidades.iniciarUtilidades(client);
 client.login(process.env.TOKEN);

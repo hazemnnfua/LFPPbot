@@ -4,6 +4,9 @@
 // ═══════════════════════════════════════════════════════════════
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 require('dotenv').config();
+const { comandosDefinicion: comandosModeracion } = require('./moderacion');
+const { comandosDefinicion: comandosUtilidades } = require('./utilidades');
+const { comandosDefinicion: comandosPanel } = require('./panel');
 
 // ─── Servidor al que quedan restringidos árbitros, verificación,
 //     admin, presidente, jugador y consultas del mercado ────────
@@ -142,7 +145,7 @@ const commandsRestringidos = [
 
 ].map(c => c.toJSON());
 
-// ─── MÚSICA — funcionan en cualquier servidor ─────────────────
+// ─── MÚSICA + MODERACIÓN — funcionan en cualquier servidor ────
 const commandsGlobales = [
   new SlashCommandBuilder()
     .setName('play')
@@ -171,6 +174,15 @@ const commandsGlobales = [
     .setName('leave')
     .setDescription('Saca al bot del canal de voz'),
 
+  // ─── MODERACIÓN (multi-servidor: config propia por servidor) ───
+  ...comandosModeracion,
+
+  // ─── PANEL DE CONFIGURACIÓN (/panel) ───
+  ...comandosPanel,
+
+  // ─── UTILIDADES (info, herramientas, gestión, niveles, diversión) ───
+  ...comandosUtilidades,
+
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -191,7 +203,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
     console.log(`✅ ${commandsRestringidos.length} comandos restringidos registrados.`);
 
     // Comandos globales (música): disponibles en cualquier servidor donde esté el bot
-    console.log(`Registrando ${commandsGlobales.length} comandos globales (música)...`);
+    console.log(`Registrando ${commandsGlobales.length} comandos globales (música + moderación)...`);
     await rest.put(
       Routes.applicationCommands(process.env.CLIENT_ID),
       { body: commandsGlobales }
