@@ -113,7 +113,7 @@ function embedReproduciendo(track) {
     .setDescription(`**[${track.title}](${track.uri})**`)
     .addFields(
       { name: 'Duración', value: formatDuration(track.length), inline: true },
-      { name: 'Pedido por', value: `${track.requester}`, inline: true },
+      { name: 'Pedido por', value: `${track.requester?.tag || track.requester}`, inline: true },
       { name: 'Fuente', value: track.sourceName || 'desconocida', inline: true },
     )
     .setThumbnail(track.thumbnail || null);
@@ -194,7 +194,7 @@ async function cmdPlay(interaction) {
       });
     }
 
-    const result = await kazagumo.search(query, { requester: interaction.member.user.tag });
+    const result = await kazagumo.search(query, { requester: { tag: interaction.member.user.tag, id: interaction.member.user.id } });
     if (!result || !result.tracks.length) {
       return interaction.editReply({ embeds: [embedError('❌ No pude encontrar o reproducir eso. Verifica el link o intenta con otro nombre.')] });
     }
