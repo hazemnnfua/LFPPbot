@@ -757,13 +757,10 @@ async function manejarComandoOwner(message) {
       // servidor; los demás solo si tienen el permiso correspondiente.
       const opciones = { esOwnerBot: message.author.id === OWNER_ID };
 
-      // ─── PANEL (§panel) ───
+      // ─── PANEL (§panel) ─── Tú (OWNER_ID) siempre puedes abrirlo; los
+      // demás necesitan "Gestionar servidor" (lo valida panel.js).
       if (nombre === 'panel' || nombre === 'configurar') {
-        if (!opciones.esOwnerBot && !message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-          await message.reply('❌ Necesitas el permiso **Gestionar servidor** para abrir el panel.').catch(() => {});
-          break;
-        }
-        await message.reply('⚙️ Abre el panel con `/panel` (los menús y botones solo funcionan por slash).').catch(() => {});
+        await panel.enviarPanelPrefijo(message, OWNER_ID);
         break;
       }
 

@@ -54,6 +54,23 @@ function puedeUsar(interaction, ownerId) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
 }
 
+// Abre el panel a partir de un mensaje con prefijo (§panel).
+// Los botones/menús que genera son interacciones reales al hacer clic,
+// así que funcionan exactamente igual que si el panel se hubiera abierto
+// con /panel — incluidos los modales.
+async function enviarPanelPrefijo(message, ownerId) {
+  if (!message.guild) return false;
+  const esOwner = message.author.id === ownerId;
+  if (!esOwner && !message.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await message.reply('❌ Necesitas el permiso **Gestionar servidor** para abrir el panel.').catch(() => {});
+    return true;
+  }
+  await message
+    .reply({ embeds: [embedInicio(message.guild)], components: [menuSecciones(null)], allowedMentions: { repliedUser: false } })
+    .catch(() => message.channel.send({ embeds: [embedInicio(message.guild)], components: [menuSecciones(null)] }).catch(() => {}));
+  return true;
+}
+
 function embedInicio(guild) {
   const mod = moderacion.getConfig(guild.id);
   const uti = utilidades.getCfgUtil(guild.id);
@@ -472,4 +489,4 @@ async function manejarPanel(interaction, ownerId) {
   return false;
 }
 
-module.exports = { comandosDefinicion, manejarPanel };
+module.exports = { comandosDefinicion, manejarPanel, enviarPanelPrefijo };
