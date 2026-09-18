@@ -5,7 +5,11 @@
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 require('dotenv').config();
 
-const commands = [
+// ─── Servidor al que quedan restringidos árbitros, verificación,
+//     admin, presidente, jugador y consultas del mercado ────────
+const LFPP_GUILD_ID = '1524182983173603439';
+
+const commandsRestringidos = [
 
   // ─── ÁRBITROS ──────────────────────────────────────────────
   new SlashCommandBuilder()
@@ -136,7 +140,10 @@ const commands = [
     .setName('mercado-estado')
     .setDescription('Ver si el mercado está abierto y la configuración actual'),
 
-  // ─── MÚSICA ──────────────────────────────────────────────
+].map(c => c.toJSON());
+
+// ─── MÚSICA — funcionan en cualquier servidor ─────────────────
+const commandsGlobales = [
   new SlashCommandBuilder()
     .setName('play')
     .setDescription('Reproduce música desde YouTube, Spotify, SoundCloud o un nombre de canción')
@@ -170,16 +177,26 @@ const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
 (async () => {
   try {
-    if (!process.env.CLIENT_ID || !process.env.GUILD_ID) {
-      console.error('❌ Falta CLIENT_ID o GUILD_ID en el .env');
+    if (!process.env.CLIENT_ID) {
+      console.error('❌ Falta CLIENT_ID en el .env');
       process.exit(1);
     }
-    console.log(`Registrando ${commands.length} comandos slash...`);
+
+    // Comandos restringidos: solo visibles/usables en el servidor LFPP
+    console.log(`Registrando ${commandsRestringidos.length} comandos restringidos en el servidor ${LFPP_GUILD_ID}...`);
     await rest.put(
-      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-      { body: commands }
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, LFPP_GUILD_ID),
+      { body: commandsRestringidos }
     );
-    console.log(`✅ ${commands.length} comandos registrados correctamente.`);
+    console.log(`✅ ${commandsRestringidos.length} comandos restringidos registrados.`);
+
+    // Comandos globales (música): disponibles en cualquier servidor donde esté el bot
+    console.log(`Registrando ${commandsGlobales.length} comandos globales (música)...`);
+    await rest.put(
+      Routes.applicationCommands(process.env.CLIENT_ID),
+      { body: commandsGlobales }
+    );
+    console.log(`✅ ${commandsGlobales.length} comandos globales registrados. (Pueden tardar hasta 1h en propagarse a todos los servidores.)`);
   } catch (err) {
     console.error('❌ Error registrando comandos:', err);
   }

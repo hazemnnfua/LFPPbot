@@ -27,6 +27,24 @@ const CANAL_REGISTROS_VERIFICACION_ID = '1549624039327141898';
 // ─── ID del dueño del bot — puede usar comandos con prefijo § en cualquier servidor ───
 const OWNER_ID = '720788058684784691';
 
+// ─── Servidor al que quedan restringidos árbitros, verificación, admin,
+//     presidente, jugador y consultas del mercado (deploy-commands.js
+//     ya los registra solo ahí; esto es una red de seguridad extra) ───
+const LFPP_GUILD_ID = '1524182983173603439';
+const COMANDOS_RESTRINGIDOS = new Set([
+  // árbitros
+  'postular-arbitro',
+  // verificación
+  'verificar', 'verificar-reset', 'quien-es',
+  // admin / presidente / jugador / consultas — mercado
+  'mercado-abrir', 'mercado-cerrar', 'registrar-club', 'asignar-presidente',
+  'registrar-jugador', 'actualizar-valor', 'add-presupuesto', 'bono-victoria',
+  'sancionar-jugador', 'levantar-sancion', 'rescindir-forzar',
+  'ofrecer', 'prestar', 'pagar-clausula',
+  'mis-ofertas', 'aceptar-oferta', 'rechazar-oferta', 'rescindir', 'mi-contrato',
+  'plantilla', 'agentes-libres', 'valor-jugador', 'presupuesto', 'mercado-estado',
+]);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -615,10 +633,18 @@ async function manejarComandoQuienEs(interaction) {
 //      §mercado-abrir, §mercado-cerrar, §registrar-club <nombre>
 //      §reglas-general, §reglas-partido, §reglas-mercado, §reglas-clubes
 // ═══════════════════════════════════════
+// ─── Comandos de música con prefijo §: cualquiera puede usarlos.
+//     El resto (reglas, mercado) sigue siendo solo para el OWNER_ID. ───
+const MUSICA_COMANDOS_PREFIJO = new Set(['play', 'skip', 'stop', 'pause', 'resume', 'queue', 'leave', 'volumen']);
+
 async function manejarComandoOwner(message) {
-  if (message.author.id !== OWNER_ID) return;
   const contenido = message.content.slice(1).trim(); // quita el §
   const [cmd, ...args] = contenido.split(' ');
+  const esMusica = MUSICA_COMANDOS_PREFIJO.has(cmd.toLowerCase());
+
+  // Los comandos que no son de música siguen restringidos al dueño del bot
+  if (!esMusica && message.author.id !== OWNER_ID) return;
+
   const arg = args.join(' ');
 
   // Simula un objeto interaction mínimo para reutilizar las funciones existentes
@@ -725,6 +751,18 @@ client.once('clientReady', () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    // ─── Bloquear comandos restringidos fuera del servidor LFPP ───
+    if (
+      interaction.isChatInputCommand() &&
+      COMANDOS_RESTRINGIDOS.has(interaction.commandName) &&
+      interaction.guildId !== LFPP_GUILD_ID
+    ) {
+      return interaction.reply({
+        content: '❌ Este comando solo se puede usar en el servidor oficial de la LFPP.',
+        ephemeral: true,
+      });
+    }
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'postular-arbitro') {
       await manejarComandoPostular(interaction);
     } else if (interaction.isChatInputCommand() && interaction.commandName === 'verificar') {
@@ -821,7 +859,7 @@ client.on('messageCreate', async (message) => {
   if (!message.guild) return;
 
   // ─── Comandos de owner con prefijo § ───────────────────────
-  if (message.content.startsWith('§') && message.author.id === OWNER_ID) {
+  if (message.content.startsWith('§')) {
     await manejarComandoOwner(message);
     return;
   }
