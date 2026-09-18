@@ -9,6 +9,15 @@ const { Kazagumo } = require('kazagumo');
 const { Connectors } = require('shoukaku');
 const { EmbedBuilder } = require('discord.js');
 
+// ─── Red de seguridad: un error async sin capturar (ej. de Lavalink) no debe
+// tumbar el proceso completo del bot. Solo lo logueamos.
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ unhandledRejection (no tumba el bot):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ uncaughtException (no tumba el bot):', err);
+});
+
 const COLOR = { VERDE: 0x2ecc71, ROJO: 0xe74c3c, AZUL: 0x3498db, GRIS: 0x95a5a6 };
 
 let kazagumo = null;
@@ -203,7 +212,14 @@ async function cmdPlay(interaction) {
       }
     }
 
-    if (!player.playing && !player.paused) player.play();
+    if (!player.playing && !player.paused) {
+      try {
+        await player.play();
+      } catch (playErr) {
+        console.error('❌ Error al iniciar reproducción (player.play):', playErr);
+        await interaction.followUp({ embeds: [embedError('❌ Lavalink rechazó la reproducción. Intenta de nuevo en unos segundos.')] }).catch(() => {});
+      }
+    }
   } catch (err) {
     console.error('Error en /play:', err);
     await interaction.editReply({ embeds: [embedError('❌ No pude encontrar o reproducir eso. Verifica el link o intenta con otro nombre.')] });
