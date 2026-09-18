@@ -70,6 +70,18 @@ function iniciarMusica(client) {
     });
 
   console.log('🎵 Sistema de música (Kazagumo/Lavalink) inicializado.');
+
+  setTimeout(() => {
+    try {
+      const nodesMap = kazagumo.shoukaku.nodes;
+      console.log('🔍 DEBUG estado de nodos tras 8s:', nodesMap.size, 'nodo(s) registrados');
+      for (const [name, node] of nodesMap) {
+        console.log(`🔍 DEBUG nodo "${name}": state=${node.state}, stats=${JSON.stringify(node.stats)}`);
+      }
+    } catch (e) {
+      console.error('🔍 DEBUG error leyendo nodos:', e.message);
+    }
+  }, 8000);
 }
 
 // ─── utilidades ───────────────────────────────────────────────
