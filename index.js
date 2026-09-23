@@ -6,6 +6,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
   PermissionFlagsBits,
   ActivityType,
   ChannelType,
@@ -26,47 +27,29 @@ const utilidades = require('./utilidades');
 const panel = require('./panel');
 
 const ROL_ARBITRO_ID = '1526591280749084742';
-const ROL_VERIFICADO_ID = process.env.ROL_VERIFICADO_ID; // configurar en .env
+const ROL_VERIFICADO_ID = process.env.ROL_VERIFICADO_ID;
 const CANAL_REGISTROS_VERIFICACION_ID = '1549624039327141898';
 
-// ─── ID del dueño del bot — puede usar comandos con prefijo § en cualquier servidor ───
+// ─── ID del dueño del bot ───
 const OWNER_ID = '720788058684784691';
 
-// ─── IDs con reacciones especiales para el comando §protocolo (solo humor, no destructivo) ───
-const PROTOCOLO_USER_1 = ''; // recibe Eh? -> saya -> andate alv + kick puntual
-const PROTOCOLO_USER_2 = '1523052015838560498'; // dueño del server, recibe "los compartidos jaja", nunca se kickea
+// ─── IDs con reacciones especiales para §protocolo ───
+const PROTOCOLO_USER_1 = '1094422375837212814'; // saya — recibe JARVIS-style + menú de dictador
+const PROTOCOLO_USER_2 = '1523052015838560498'; // dueño del server — "los compartidos jaja"
 
-// ─── Estado del "protocolo" (modo pánico visual, no destructivo) por servidor ───
-// Guarda el nickname original del bot para poder restaurarlo con §desactivar
-const protocoloActivo = new Map(); // guildId -> { nicknameOriginal }
+// ─── Estado del protocolo ───
+const protocoloActivo = new Map();
+const protocoloUltimoTrigger = new Map();
 
-// ─── Cooldown por usuario para el efecto "exterminando" mientras el protocolo
-//     está activo, así no se dispara en cada mensaje seguido ───
-const protocoloUltimoTrigger = new Map(); // `${guildId}:${userId}` -> timestamp
-
-// ─── Cooldown global: no se puede reactivar §protocolo dos veces seguidas
-//     en menos de este tiempo, para que no pierda gracia por spam ───
 const PROTOCOLO_COOLDOWN_MS = 2 * 60 * 1000;
-const protocoloUltimaActivacion = new Map(); // guildId -> timestamp
+const protocoloUltimaActivacion = new Map();
 
-// ─── Nombre del canal de voz "búnker" al que se mueve a quien activa el
-//     protocolo si está conectado a voz (búsqueda por nombre, no ID fijo) ───
 const PROTOCOLO_CANAL_BUNKER_NOMBRE = 'búnker';
-
-// ─── Nombre del rol temporal que reciben quienes "caen" durante el protocolo ───
 const PROTOCOLO_ROL_ALERTA_NOMBRE = '🚨 En Alerta';
-
-// ─── ícono del servidor durante el protocolo (reemplazable por uno propio) ───
-const PROTOCOLO_ICON_URL = null; // ej: 'https://tu-imagen.com/icono-alerta.png' — si es null, no se cambia
-
-// ─── ID opcional de un "objetivo especial": si habla durante el protocolo,
-//     recibe un mini-evento único en vez de la secuencia normal (dejar '' si no aplica) ───
+const PROTOCOLO_ICON_URL = null;
 const PROTOCOLO_OBJETIVO_ESPECIAL_ID = '';
-
-// ─── Auto-desactivación si nadie usa §desactivar en este tiempo ───
 const PROTOCOLO_AUTO_DESACTIVAR_MS = 15 * 60 * 1000;
 
-// ─── Frases de cierre random para el informe final de §desactivar ───
 const PROTOCOLO_LINEAS_CIERRE = [
   '* El PROTOCOLO se detiene.\n> Todos vuelven a sus asuntos... por ahora.',
   '* La alarma se apaga.\n> Pero algo quedó marcado.',
@@ -74,22 +57,18 @@ const PROTOCOLO_LINEAS_CIERRE = [
   '* El PROTOCOLO se repliega a las sombras.\n> Volverá.',
 ];
 
-// ─── Nombres de canal falsos para el efecto "BORRANDO..." (no borra nada real) ───
 const PROTOCOLO_CANALES_FALSOS = ['#general', '#anuncios', '#mercado', '#reglas', '#chat-general', '#bienvenida'];
 
-// ─── Nivel de alerta escalonado por servidor (sube con cada activación del mismo
-//     día, se resetea al día siguiente) ───
-const protocoloNivelPorGuild = new Map(); // guildId -> { fecha, nivel }
+const protocoloNivelPorGuild = new Map();
 
 function calcularNivelProtocolo(guildId) {
   const hoy = new Date().toISOString().slice(0, 10);
   const registro = protocoloNivelPorGuild.get(guildId);
   const nivel = registro && registro.fecha === hoy ? registro.nivel + 1 : 1;
   protocoloNivelPorGuild.set(guildId, { fecha: hoy, nivel });
-  return Math.min(nivel, 5); // tope en 5 para que no se vuelva eterno
+  return Math.min(nivel, 5);
 }
 
-// ─── Probabilidad de que alguien "sobreviva" al efecto pasivo (vibra Undertale) ───
 const PROTOCOLO_SOBREVIVIENTE_CHANCE = 0.15;
 const PROTOCOLO_LINEAS_SOBREVIVIENTE = [
   '* Sientes que todavía te queda DETERMINACIÓN.\n> Fuiste PERDONADO.',
@@ -98,10 +77,8 @@ const PROTOCOLO_LINEAS_SOBREVIVIENTE = [
   '* Algo en tu interior brilla débilmente.\n> No fuiste ELIMINADO.',
 ];
 
-// ─── GIF dramático para el embed de activación de §protocolo (reemplazable) ───
 const PROTOCOLO_GIF_URL = 'https://media.tenor.com/2roX3-D1QEwAAAAC/alarm-siren.gif';
 
-// ─── Frases de apertura dramáticas para la secuencia de activación de §protocolo ───
 const PROTOCOLO_FRASES_DRAMATICAS = [
   'Se ha detectado una anomalía de nivel crítico.',
   'Los sistemas de contención están al límite.',
@@ -113,8 +90,6 @@ const PROTOCOLO_FRASES_DRAMATICAS = [
   'Nadie sale, nadie entra.',
 ];
 
-// ─── Respuestas random (tono súper formal/burocrático, humor de meme) para
-//     cualquiera que use §protocolo sin ser owner ni tener reacción propia ───
 const RESPUESTAS_PROTOCOLO = [
   'Por disposición del Artículo 7 del Reglamento Interno, su solicitud ha sido denegada.',
   'Acceso restringido. Favor dirigirse a Mesa de Partes para tramitar su reclamo.',
@@ -168,16 +143,10 @@ const RESPUESTAS_PROTOCOLO = [
   'Trámite concluido: motivo, usted.',
 ];
 
-// ─── Servidor al que quedan restringidos árbitros, verificación, admin,
-//     presidente, jugador y consultas del mercado (deploy-commands.js
-//     ya los registra solo ahí; esto es una red de seguridad extra) ───
 const LFPP_GUILD_ID = '1524182983173603439';
 const COMANDOS_RESTRINGIDOS = new Set([
-  // árbitros
   'postular-arbitro',
-  // verificación
   'verificar', 'verificar-reset', 'quien-es',
-  // admin / presidente / jugador / consultas — mercado
   'mercado-abrir', 'mercado-cerrar', 'registrar-club', 'asignar-presidente',
   'registrar-jugador', 'actualizar-valor', 'add-presupuesto', 'bono-victoria',
   'sancionar-jugador', 'levantar-sancion', 'rescindir-forzar',
@@ -193,15 +162,14 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildModeration, // eventos de ban/unban manual (logs de moderación)
-    GatewayIntentBits.GuildMembers, // ← PRIVILEGIADO: actívalo en el Portal de Desarrolladores.
-                                    //    Necesario para bienvenida, despedida y autorol.
+    GatewayIntentBits.GuildModeration,
+    GatewayIntentBits.GuildMembers,
   ],
-  partials: [Partials.Channel, Partials.Message], // necesario para recibir DMs de forma fiable
+  partials: [Partials.Channel, Partials.Message],
 });
 
 // ═══════════════════════════════════════
-// !reglas-general → Sección 1
+// !reglas-general
 // ═══════════════════════════════════════
 function embedsGeneral() {
   const e1 = new EmbedBuilder()
@@ -235,7 +203,7 @@ function embedsGeneral() {
 }
 
 // ═══════════════════════════════════════
-// !reglas-partido → Secciones 2, 3, 4, 5, 6, 9, 10
+// !reglas-partido
 // ═══════════════════════════════════════
 function embedsPartido() {
   const e1 = new EmbedBuilder()
@@ -329,7 +297,7 @@ function embedsPartido() {
 }
 
 // ═══════════════════════════════════════
-// !reglas-mercado → Sección 7
+// !reglas-mercado
 // ═══════════════════════════════════════
 function embedsMercado() {
   const e1 = new EmbedBuilder()
@@ -354,7 +322,7 @@ function embedsMercado() {
 }
 
 // ═══════════════════════════════════════
-// !reglas-clubes → Sección 8
+// !reglas-clubes
 // ═══════════════════════════════════════
 function embedsClubes() {
   const e1 = new EmbedBuilder()
@@ -372,16 +340,9 @@ function embedsClubes() {
   return [e1];
 }
 
-// ═══════════════════════════════════════
-// UTILIDAD: espera entre mensajes
-// ═══════════════════════════════════════
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
-
-// ═══════════════════════════════════════
-// POSTULACIÓN A ÁRBITRO
-// ═══════════════════════════════════════
 
 function limpiarTextoPregunta(p) {
   return p.replace(/^[0-9️⃣]+\s*/u, '');
@@ -394,10 +355,7 @@ async function manejarComandoPostular(interaction) {
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
     const member = await guild.members.fetch(userId);
     if (member.roles.cache.has(ROL_ARBITRO_ID)) {
-      return interaction.reply({
-        content: '✅ Ya tenés el rol de árbitro, así que no podés volver a postular.',
-        ephemeral: true,
-      });
+      return interaction.reply({ content: '✅ Ya tenés el rol de árbitro, así que no podés volver a postular.', ephemeral: true });
     }
   } catch (err) {
     console.error('No pude verificar el rol de árbitro del usuario antes de postular:', err);
@@ -405,34 +363,22 @@ async function manejarComandoPostular(interaction) {
 
   const restriccion = postulacionesDB.obtenerRestriccion(userId);
   if (restriccion?.tipo === 'aceptada') {
-    return interaction.reply({
-      content: '✅ Ya fuiste aceptado como árbitro anteriormente, así que no podés volver a postular.',
-      ephemeral: true,
-    });
+    return interaction.reply({ content: '✅ Ya fuiste aceptado como árbitro anteriormente, así que no podés volver a postular.', ephemeral: true });
   }
   if (restriccion?.tipo === 'cooldown') {
     const timestamp = Math.floor(restriccion.disponibleEn.getTime() / 1000);
-    return interaction.reply({
-      content: `⏳ Tu postulación anterior fue rechazada. Podés volver a postular <t:${timestamp}:R> (<t:${timestamp}:f>).`,
-      ephemeral: true,
-    });
+    return interaction.reply({ content: `⏳ Tu postulación anterior fue rechazada. Podés volver a postular <t:${timestamp}:R> (<t:${timestamp}:f>).`, ephemeral: true });
   }
 
   if (postulacionesDB.tienePendiente(userId)) {
-    return interaction.reply({
-      content: '⏳ Ya tienes una postulación **pendiente** de revisión. Espera la respuesta de un admin antes de volver a postular.',
-      ephemeral: true,
-    });
+    return interaction.reply({ content: '⏳ Ya tienes una postulación **pendiente** de revisión. Espera la respuesta de un admin antes de volver a postular.', ephemeral: true });
   }
 
   let dmChannel;
   try {
     dmChannel = await interaction.user.createDM();
   } catch (err) {
-    return interaction.reply({
-      content: '❌ No pude enviarte un DM. Activa los mensajes directos para este servidor (Configuración de privacidad del servidor) e inténtalo de nuevo.',
-      ephemeral: true,
-    });
+    return interaction.reply({ content: '❌ No pude enviarte un DM. Activa los mensajes directos para este servidor e inténtalo de nuevo.', ephemeral: true });
   }
 
   await interaction.reply({ content: '📬 Te envié las preguntas por DM. Revisa tu privado para completar la postulación.', ephemeral: true });
@@ -450,10 +396,7 @@ async function manejarComandoPostular(interaction) {
       ],
     });
   } catch (err) {
-    return interaction.followUp({
-      content: '❌ No pude enviarte el DM (puede que los tengas cerrados para este servidor). Actívalos e inténtalo de nuevo.',
-      ephemeral: true,
-    });
+    return interaction.followUp({ content: '❌ No pude enviarte el DM (puede que los tengas cerrados para este servidor). Actívalos e inténtalo de nuevo.', ephemeral: true });
   }
 
   const respuestas = [];
@@ -497,7 +440,7 @@ async function manejarComandoPostular(interaction) {
 
     const embed = new EmbedBuilder()
       .setColor(0xf1c40f)
-      .setTitle('🧑\u200d⚖️ Nueva postulación a árbitro')
+      .setTitle('🧑‍⚖️ Nueva postulación a árbitro')
       .setDescription(`**Candidato:** ${interaction.user.tag} (<@${userId}>)`)
       .addFields(respuestas.map((r, i) => ({
         name: `${i + 1}. ${limpiarTextoPregunta(r.pregunta)}`.slice(0, 256),
@@ -528,9 +471,7 @@ async function manejarBotonPostulacion(interaction) {
   const [, accion, id] = match;
 
   const postulacion = postulacionesDB.getPostulacion(id);
-  if (!postulacion) {
-    return interaction.reply({ content: 'No encontré esta postulación (puede que el archivo se haya reiniciado).', ephemeral: true });
-  }
+  if (!postulacion) return interaction.reply({ content: 'No encontré esta postulación (puede que el archivo se haya reiniciado).', ephemeral: true });
 
   if (postulacion.estado === 'aceptada' || postulacion.estado === 'rechazada') {
     return interaction.reply({ content: `Esta postulación ya fue marcada como **${postulacion.estado}**.`, ephemeral: true });
@@ -563,9 +504,7 @@ async function manejarBotonPostulacion(interaction) {
   try {
     const user = await client.users.fetch(postulacion.userId);
     await user.send(mensajesDM[accion]);
-  } catch (err) {
-    // DMs cerrados
-  }
+  } catch (err) {}
 
   const colores = { aceptada: 0x2ecc71, rechazada: 0xe74c3c, 'en entrevista': 0xf39c12 };
   const embedOriginal = interaction.message.embeds[0];
@@ -582,26 +521,16 @@ async function manejarBotonPostulacion(interaction) {
   await interaction.update({ embeds: [nuevoEmbed], components: [nuevaFila] });
 }
 
-// ═══════════════════════════════════════
-// VERIFICACIÓN DE ROBLOX
-// ═══════════════════════════════════════
-
 async function manejarComandoVerificar(interaction) {
   const discordId = interaction.user.id;
 
   const existente = verificacionDB.getVerificacionPorDiscordId(discordId);
   if (existente) {
-    return interaction.reply({
-      content: `✅ Ya tienes vinculada la cuenta de Roblox **${existente.robloxUsername}**. Si necesitas cambiarla, pide a un admin que use \`/verificar-reset\`.`,
-      ephemeral: true,
-    });
+    return interaction.reply({ content: `✅ Ya tienes vinculada la cuenta de Roblox **${existente.robloxUsername}**. Si necesitas cambiarla, pide a un admin que use \`/verificar-reset\`.`, ephemeral: true });
   }
 
   if (!process.env.ROBLOX_CLIENT_ID || !process.env.ROBLOX_REDIRECT_URI) {
-    return interaction.reply({
-      content: '❌ La verificación con Roblox todavía no está configurada en el bot (falta ROBLOX_CLIENT_ID/ROBLOX_REDIRECT_URI en el .env).',
-      ephemeral: true,
-    });
+    return interaction.reply({ content: '❌ La verificación con Roblox todavía no está configurada en el bot.', ephemeral: true });
   }
 
   const link = robloxOAuth.crearLinkVerificacion(discordId);
@@ -629,9 +558,7 @@ async function manejarComandoVerificarReset(interaction) {
 
   const usuario = interaction.options.getUser('usuario');
   const existente = verificacionDB.getVerificacionPorDiscordId(usuario.id);
-  if (!existente) {
-    return interaction.reply({ content: `❌ <@${usuario.id}> no tiene ninguna cuenta de Roblox vinculada.`, ephemeral: true });
-  }
+  if (!existente) return interaction.reply({ content: `❌ <@${usuario.id}> no tiene ninguna cuenta de Roblox vinculada.`, ephemeral: true });
 
   verificacionDB.eliminarVerificacion(usuario.id);
   await interaction.reply({ content: `✅ Vínculo de <@${usuario.id}> con **${existente.robloxUsername}** eliminado. Ya puede usar \`/verificar\` de nuevo.`, ephemeral: true });
@@ -645,11 +572,9 @@ async function procesarCallbackRoblox(code, state) {
   console.log('[verificacion] State válido para discordId:', discordId);
 
   const tokenData = await robloxOAuth.intercambiarCodigo(code);
-  console.log('[verificacion] Token obtenido, pidiendo userinfo...');
   const userinfo = await robloxOAuth.obtenerUserinfo(tokenData.access_token);
   const robloxId = userinfo.sub;
   const robloxUsername = userinfo.preferred_username || userinfo.name;
-  console.log('[verificacion] Userinfo OK:', robloxId, robloxUsername);
 
   const ocupado = verificacionDB.getVerificacionPorRobloxId(robloxId);
   if (ocupado && ocupado[0] !== discordId) {
@@ -661,36 +586,28 @@ async function procesarCallbackRoblox(code, state) {
     robloxUsername,
     fechaVerificacion: new Date().toISOString(),
   });
-  console.log('[verificacion] Guardado en verificaciones.json');
 
   try {
-    console.log('[verificacion] Buscando guild y member para nickname/rol...');
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
     const member = await guild.members.fetch(discordId);
-
     const nombreBase = member.displayName || member.user.username;
     const sufijo = `(${robloxUsername})`;
     const espacioDisponible = 32 - sufijo.length;
     const nombreRecortado = nombreBase.slice(0, Math.max(espacioDisponible, 0));
     const nuevoNickname = `${nombreRecortado}${sufijo}`.slice(0, 32);
 
-    await member.setNickname(nuevoNickname).catch((e) => console.error('[verificacion] setNickname falló:', e.message));
-    if (ROL_VERIFICADO_ID) await member.roles.add(ROL_VERIFICADO_ID).catch((e) => console.error('[verificacion] roles.add falló:', e.message));
-    console.log('[verificacion] Nickname/rol aplicados');
+    await member.setNickname(nuevoNickname).catch(() => {});
+    if (ROL_VERIFICADO_ID) await member.roles.add(ROL_VERIFICADO_ID).catch(() => {});
   } catch (err) {
     console.error('No pude poner nickname/rol de verificado:', err);
   }
 
   try {
-    console.log('[verificacion] Enviando DM de confirmación...');
     const user = await client.users.fetch(discordId);
     await user.send(`✅ ¡Listo! Tu Discord quedó vinculado a tu cuenta de Roblox **${robloxUsername}**.`);
-  } catch (err) {
-    console.error('[verificacion] No se pudo mandar el DM (probablemente cerrados):', err.message);
-  }
+  } catch (err) {}
 
   try {
-    console.log('[verificacion] Publicando en canal de registros...');
     const canalRegistros = await client.channels.fetch(CANAL_REGISTROS_VERIFICACION_ID);
     const embedRegistro = new EmbedBuilder()
       .setColor(0x2ecc71)
@@ -701,29 +618,19 @@ async function procesarCallbackRoblox(code, state) {
       )
       .setTimestamp();
     await canalRegistros.send({ embeds: [embedRegistro] });
-    console.log('[verificacion] Listo, todo procesado.');
-  } catch (err) {
-    console.error('No pude publicar en el canal de registros de verificación:', err.message);
-  }
+  } catch (err) {}
 
   return { ok: true, robloxUsername, discordId };
 }
 
-// ═══════════════════════════════════════
-// SERVIDOR WEB (OAuth)
-// ═══════════════════════════════════════
 function iniciarServidorOAuth() {
   const app = express();
 
   app.get('/auth/roblox/callback', async (req, res) => {
     const { code, state, error } = req.query;
 
-    if (error) {
-      return res.status(400).send('<h1>❌ Autorización cancelada</h1><p>Puedes cerrar esta pestaña y volver a intentar con /verificar.</p>');
-    }
-    if (!code || !state) {
-      return res.status(400).send('<h1>❌ Falta información en la redirección.</h1>');
-    }
+    if (error) return res.status(400).send('<h1>❌ Autorización cancelada</h1><p>Puedes cerrar esta pestaña y volver a intentar con /verificar.</p>');
+    if (!code || !state) return res.status(400).send('<h1>❌ Falta información en la redirección.</h1>');
 
     try {
       const resultado = await procesarCallbackRoblox(String(code), String(state));
@@ -753,9 +660,7 @@ async function manejarComandoQuienEs(interaction) {
   const usuario = interaction.options.getUser('usuario');
   const info = verificacionDB.getVerificacionPorDiscordId(usuario.id);
 
-  if (!info) {
-    return interaction.reply({ content: `❌ <@${usuario.id}> no tiene ninguna cuenta de Roblox vinculada.`, ephemeral: true });
-  }
+  if (!info) return interaction.reply({ content: `❌ <@${usuario.id}> no tiene ninguna cuenta de Roblox vinculada.`, ephemeral: true });
 
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
@@ -771,24 +676,14 @@ async function manejarComandoQuienEs(interaction) {
 
 // ═══════════════════════════════════════
 // COMANDOS DE OWNER CON PREFIJO §
-// Solo funcionan si el mensaje lo envía el OWNER_ID
-// Uso: §play <busqueda>, §skip, §stop, §pause, §resume, §queue, §leave
-//      §volumen <1-100>
-//      §mercado-abrir, §mercado-cerrar, §registrar-club <nombre>
-//      §reglas-general, §reglas-partido, §reglas-mercado, §reglas-clubes
 // ═══════════════════════════════════════
-// ─── Comandos de música con prefijo §: cualquiera puede usarlos.
-//     El resto (reglas, mercado) sigue siendo solo para el OWNER_ID. ───
 const MUSICA_COMANDOS_PREFIJO = new Set(['play', 'skip', 'stop', 'pause', 'resume', 'queue', 'leave', 'volumen']);
 
-// Comandos que quedan reservados exclusivamente al dueño del bot
 const SOLO_OWNER_PREFIJO = new Set([
   'reglas-general', 'reglas-partido', 'reglas-mercado', 'reglas-clubes',
   'mercado-abrir', 'mercado-cerrar', 'mercado-estado',
 ]);
 
-// ─── Restaura todo lo que §protocolo cambió y manda el informe final. Se usa
-//     tanto desde §desactivar como desde el auto-apagado por tiempo. ───
 async function desactivarProtocolo(guild, canalAviso) {
   const estado = protocoloActivo.get(guild.id);
   if (!estado) return false;
@@ -799,17 +694,13 @@ async function desactivarProtocolo(guild, canalAviso) {
   try {
     const member = await guild.members.fetchMe();
     await member.setNickname(estado.nicknameOriginal || null);
-  } catch (err) {
-    console.error('[protocolo] No pude restaurar el nickname del bot:', err.message);
-  }
+  } catch (err) {}
 
   if (estado.activadorId) {
     try {
       const activador = await guild.members.fetch(estado.activadorId);
       if (activador.moderatable) await activador.setNickname(estado.activadorNicknameOriginal || null);
-    } catch (err) {
-      console.error('[protocolo] No pude restaurar el nickname del activador:', err.message);
-    }
+    } catch (err) {}
   }
 
   if (estado.canalId) {
@@ -820,32 +711,22 @@ async function desactivarProtocolo(guild, canalAviso) {
         await canal.setRateLimitPerUser(estado.slowmodeOriginal || 0);
         if (estado.nombreCanalOriginal) await canal.setName(estado.nombreCanalOriginal);
       }
-    } catch (err) {
-      console.error('[protocolo] No pude restaurar topic/slowmode/nombre:', err.message);
-    }
+    } catch (err) {}
   }
 
   if (estado.iconoOriginal !== undefined) {
-    try {
-      await guild.setIcon(estado.iconoOriginal);
-    } catch (err) {
-      console.error('[protocolo] No pude restaurar el ícono del servidor:', err.message);
-    }
+    try { await guild.setIcon(estado.iconoOriginal); } catch (err) {}
   }
 
-  // ─── Restaura nicknames de quienes recibieron el efecto pasivo ───
   if (estado.nicksAfectados) {
     for (const [userId, nickOriginal] of estado.nicksAfectados.entries()) {
       try {
         const m = await guild.members.fetch(userId);
         if (m.moderatable) await m.setNickname(nickOriginal || null);
-      } catch (err) {
-        // el usuario puede haberse ido, no pasa nada
-      }
+      } catch (err) {}
     }
   }
 
-  // ─── Quita el rol "En Alerta" a todos los que lo tengan ───
   if (estado.rolAlertaId) {
     try {
       const rol = await guild.roles.fetch(estado.rolAlertaId);
@@ -854,28 +735,21 @@ async function desactivarProtocolo(guild, canalAviso) {
           await m.roles.remove(rol).catch(() => {});
         }
       }
-    } catch (err) {
-      console.error('[protocolo] No pude limpiar el rol de alerta:', err.message);
-    }
+    } catch (err) {}
   }
 
-  // ─── Borra el canal búnker solo si el bot lo creó en esta sesión ───
   if (estado.bunkerCreadoId) {
     try {
       const canalBunker = await guild.channels.fetch(estado.bunkerCreadoId);
-      if (canalBunker) await canalBunker.delete('Protocolo desactivado: limpiando búnker temporal');
-    } catch (err) {
-      console.error('[protocolo] No pude borrar el búnker temporal:', err.message);
-    }
+      if (canalBunker) await canalBunker.delete('Protocolo desactivado');
+    } catch (err) {}
   }
 
   if (canalAviso && estado.mensajeAlertaId) {
     try {
       const mensajeAlerta = await canalAviso.messages.fetch(estado.mensajeAlertaId);
       await mensajeAlerta.unpin('§desactivar');
-    } catch (err) {
-      // ya no existe o no se pudo despinear, no pasa nada
-    }
+    } catch (err) {}
   }
 
   client.user.setPresence({ status: 'online', activities: [] });
@@ -891,15 +765,77 @@ async function desactivarProtocolo(guild, canalAviso) {
   return true;
 }
 
+// ─── Ejecución del objetivo elegido por saya ───
+async function ejecutarEjecucion(interaction, objetivo, motivo, canalFallback) {
+  const canal = interaction?.channel || canalFallback;
+
+  if (objetivo.id === OWNER_ID) {
+    const frasesFua = [
+      '⛔ El **Dictador Fua** es superior a usted, Comandante. Directiva denegada.',
+      '⛔ No tiene autoridad sobre el **Dictador Fua**. El Alto Mando se retira.',
+      '⛔ El **Dictador Fua** está fuera de su jurisdicción. No insista.',
+    ];
+    const msg = frasesFua[Math.floor(Math.random() * frasesFua.length)];
+    if (interaction) return interaction.reply({ content: msg, ephemeral: true });
+    return canal.send(msg);
+  }
+
+  const frasesFijacion = [
+    '☠️ El Alto Mando ha decidido. Que así conste.',
+    '⚔️ La sentencia está firmada. Sin apelación posible.',
+    '🩸 No hay vuelta atrás. Proceda según reglamento.',
+    '🔥 El protocolo se cumple. La disciplina no se negocia.',
+    '🕯️ Que su cuenta descanse. Fue un honor, soldado.',
+    '📜 Por orden directa del Comandante en Jefe.',
+    '🎖️ Directiva aprobada por unanimidad del Estado Mayor.',
+    '⚖️ La balanza se ha inclinado. Sentencia inapelable.',
+    '🗡️ Se autoriza la neutralización inmediata del objetivo.',
+    '🚨 Protocolo de máxima prioridad. Sin excepciones.',
+  ];
+  const frase = frasesFijacion[Math.floor(Math.random() * frasesFijacion.length)];
+
+  if (interaction) {
+    await interaction.update({
+      content: `🎯 **OBJETIVO FIJADO:** ${objetivo.user.tag}\n${frase}`,
+      embeds: [],
+      components: [],
+    });
+  } else {
+    await canal.send(`🎯 **OBJETIVO FIJADO:** ${objetivo.user.tag}\n${frase}`);
+  }
+
+  await sleep(2000);
+
+  try {
+    if (objetivo.bannable) {
+      await objetivo.ban({ reason: `Comandante saya — ${motivo}` });
+
+      const frasesFinales = [
+        `🔨 **${objetivo.user.tag}** ha sido **neutralizado**. La orden se ha cumplido.`,
+        `🔨 **${objetivo.user.tag}** fue retirado del teatro de operaciones. Misión cumplida.`,
+        `🔨 **${objetivo.user.tag}** ha caído. El Alto Mando registra la baja.`,
+        `🔨 **${objetivo.user.tag}** ya no forma parte de este regimiento. Proceda.`,
+        `🔨 **${objetivo.user.tag}** fue dado de baja según lo dispuesto. No habrá honores.`,
+        `🔨 **${objetivo.user.tag}** ha sido expulsado. Que sirva de ejemplo.`,
+        `🔨 **${objetivo.user.tag}** neutralizado. El orden ha sido restaurado.`,
+        `🔨 **${objetivo.user.tag}** ha dejado de existir en este servidor. Así se quiso.`,
+      ];
+      await canal.send(frasesFinales[Math.floor(Math.random() * frasesFinales.length)]);
+    } else {
+      await canal.send(`⚠️ No pude neutralizar a ${objetivo.user.tag}. El objetivo goza de protección superior, Comandante.`);
+    }
+  } catch (err) {
+    console.error('[saya] Error baneando:', err.message);
+    await canal.send(`❌ Error al ejecutar la orden sobre ${objetivo.user.tag}. Revise la consola, Comandante.`);
+  }
+}
+
 async function manejarComandoOwner(message) {
-  const contenido = message.content.slice(1).trim(); // quita el §
+  const contenido = message.content.slice(1).trim();
   const [cmd, ...args] = contenido.split(' ');
   const nombre = (cmd || '').toLowerCase();
   const esMusica = MUSICA_COMANDOS_PREFIJO.has(nombre);
 
-  // ─── §protocolo: solo vos (OWNER_ID) lo activa de verdad.
-  //     Si lo escribe alguna otra persona, responde según quién sea
-  //     (personalidad/humor) en vez de ejecutar nada. ───
   if (nombre === 'protocolo' && message.author.id !== OWNER_ID) {
     if (message.author.id === PROTOCOLO_USER_1) {
       await message.channel.send('Eh?');
@@ -907,25 +843,332 @@ async function manejarComandoOwner(message) {
       await message.channel.send('que haces aca saya');
       await sleep(1000);
       await message.channel.send('andate alv');
-      try {
-        const member = await message.guild.members.fetch(PROTOCOLO_USER_1);
-        if (member.kickable) {
-          await member.kick(`${message.author.tag}: uso no autorizado de §protocolo`);
+      await sleep(1500);
+
+      await message.channel.send('```\n[SISTEMA REESTABLECIDO]\n```');
+      await sleep(1000);
+
+      const embedBienvenida = new EmbedBuilder()
+        .setColor(0x8b0000)
+        .setTitle('🖥️ SISTEMA REESTABLECIDO')
+        .setDescription(
+          '> *Inicializando núcleo de mando...*\n' +
+          '> *Verificando credenciales...*\n' +
+          '> *Autorización: SUPREMA.*\n\n' +
+          '**Bienvenido de vuelta, Dictador saya.**\n\n' +
+          'El Alto Mando está a su entera disposición. Seleccione una directiva del panel inferior.'
+        )
+        .setFooter({ text: 'Núcleo de Mando — Todas las órdenes serán registradas' })
+        .setTimestamp();
+
+      await message.channel.send({ embeds: [embedBienvenida] });
+      await sleep(1500);
+
+      const embedCategorias = new EmbedBuilder()
+        .setColor(0x8b0000)
+        .setTitle('📋 PANEL DE DIRECTIVAS — ALTO MANDO')
+        .setDescription(
+          '**Seleccione una categoría de operaciones, Comandante.**\n\n' +
+          '🪖 **Operaciones militares** — ejecución y neutralización de objetivos\n' +
+          '🎖️ **Gestión de personal** — mover, mutear, expulsar temporalmente\n' +
+          '📡 **Inteligencia** — información del servidor y miembros\n' +
+          '⚙️ **Sistemas** — control de canales, slowmode y servidor\n' +
+          '🎭 **Protocolo de entretenimiento** — acciones de moral y show\n' +
+          '☢️ **Operaciones especiales** — funciones avanzadas'
+        )
+        .setFooter({ text: 'Todas las órdenes serán registradas, Comandante.' });
+
+      const selectCategorias = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('saya_categoria')
+          .setPlaceholder('Seleccione una categoría de operaciones...')
+          .addOptions([
+            { label: 'Operaciones militares', description: 'Ejecutar, banear, expulsar objetivos', value: 'cat_militares', emoji: '🪖' },
+            { label: 'Gestión de personal', description: 'Mover, mutear, ensordecer, sancionar', value: 'cat_personal', emoji: '🎖️' },
+            { label: 'Inteligencia', description: 'Info del servidor, miembros, roles', value: 'cat_inteligencia', emoji: '📡' },
+            { label: 'Sistemas', description: 'Canales, slowmode, bloqueos', value: 'cat_sistemas', emoji: '⚙️' },
+            { label: 'Protocolo de entretenimiento', description: 'Acciones de show y moral', value: 'cat_show', emoji: '🎭' },
+            { label: 'Operaciones especiales', description: 'Funciones avanzadas y de alto riesgo', value: 'cat_especiales', emoji: '☢️' },
+          ])
+      );
+
+      const menu = await message.channel.send({ embeds: [embedCategorias], components: [selectCategorias] });
+
+      const collector = menu.createMessageComponentCollector({
+        filter: (i) => i.user.id === PROTOCOLO_USER_1,
+        time: 10 * 60 * 1000,
+      });
+
+      collector.on('collect', async (i) => {
+        try {
+          if (i.isStringSelectMenu() && i.customId === 'saya_categoria') {
+            const cat = i.values[0];
+
+            if (cat === 'cat_militares') {
+              const embed = new EmbedBuilder().setColor(0x8b0000).setTitle('🪖 OPERACIONES MILITARES').setDescription('Seleccione la directiva militar, Comandante.');
+              const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('saya_objetivo_aleatorio').setLabel('Objetivo aleatorio').setEmoji('🎲').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('saya_objetivo_mencion').setLabel('Por mención').setEmoji('🎯').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('saya_objetivo_voz').setLabel('En mi canal de voz').setEmoji('🎙️').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('saya_lista_miembros').setLabel('Lista de sospechosos').setEmoji('📋').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_cancelar').setLabel('Volver').setEmoji('↩️').setStyle(ButtonStyle.Secondary)
+              );
+              return i.update({ embeds: [embed], components: [fila] });
+            }
+
+            if (cat === 'cat_personal') {
+              const embed = new EmbedBuilder().setColor(0x8b0000).setTitle('🎖️ GESTIÓN DE PERSONAL').setDescription('Seleccione la directiva de personal, Comandante.');
+              const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('saya_personal_timeout').setLabel('Muteo temporal').setEmoji('⏳').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('saya_personal_kick').setLabel('Expulsión').setEmoji('👢').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('saya_cancelar').setLabel('Volver').setEmoji('↩️').setStyle(ButtonStyle.Secondary)
+              );
+              return i.update({ embeds: [embed], components: [fila] });
+            }
+
+            if (cat === 'cat_inteligencia') {
+              const embed = new EmbedBuilder().setColor(0x8b0000).setTitle('📡 INTELIGENCIA').setDescription('Información clasificada, Comandante.');
+              const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('saya_intel_server').setLabel('Info del servidor').setEmoji('🏛️').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_intel_miembros').setLabel('Conteo de miembros').setEmoji('👥').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_cancelar').setLabel('Volver').setEmoji('↩️').setStyle(ButtonStyle.Secondary)
+              );
+              return i.update({ embeds: [embed], components: [fila] });
+            }
+
+            if (cat === 'cat_sistemas') {
+              const embed = new EmbedBuilder().setColor(0x8b0000).setTitle('⚙️ SISTEMAS').setDescription('Control de sistemas del servidor, Comandante.');
+              const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('saya_sys_slowmode_off').setLabel('Quitar slowmode').setEmoji('🚀').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_sys_slowmode_on').setLabel('Aplicar slowmode').setEmoji('🐢').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_cancelar').setLabel('Volver').setEmoji('↩️').setStyle(ButtonStyle.Secondary)
+              );
+              return i.update({ embeds: [embed], components: [fila] });
+            }
+
+            if (cat === 'cat_show') {
+              const embed = new EmbedBuilder().setColor(0x8b0000).setTitle('🎭 PROTOCOLO DE ENTRETENIMIENTO').setDescription('Acciones de moral y show, Comandante.');
+              const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('saya_show_react').setLabel('Reacciones masivas').setEmoji('🎉').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_show_frase').setLabel('Frase del Alto Mando').setEmoji('📢').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('saya_cancelar').setLabel('Volver').setEmoji('↩️').setStyle(ButtonStyle.Secondary)
+              );
+              return i.update({ embeds: [embed], components: [fila] });
+            }
+
+            if (cat === 'cat_especiales') {
+              const embed = new EmbedBuilder().setColor(0x8b0000).setTitle('☢️ OPERACIONES ESPECIALES').setDescription('Solo para el Comandante Supremo. Proceda con cautela.');
+              const fila = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('saya_esp_lockdown').setLabel('Bloqueo de canal').setEmoji('🔒').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('saya_esp_purge').setLabel('Purga de mensajes').setEmoji('🧹').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('saya_cancelar').setLabel('Volver').setEmoji('↩️').setStyle(ButtonStyle.Secondary)
+              );
+              return i.update({ embeds: [embed], components: [fila] });
+            }
+          }
+
+          if (i.customId === 'saya_cancelar') {
+            const despedidas = [
+              '🛑 Misión abortada, Comandante. El Alto Mando se retira en silencio.',
+              '🛑 Procedimiento detenido por orden superior. Que así conste en acta.',
+              '🛑 Operación suspendida. La historia juzgará esta decisión.',
+              '🛑 Se cancela la directiva. Ninguna baja será registrada hoy.',
+            ];
+            await i.update({ content: despedidas[Math.floor(Math.random() * despedidas.length)], embeds: [], components: [] });
+            collector.stop();
+            return;
+          }
+
+          if (i.customId === 'saya_objetivo_aleatorio') {
+            const miembros = await message.guild.members.fetch();
+            const candidatos = miembros.filter((m) => !m.user.bot && m.id !== message.author.id && m.id !== OWNER_ID && m.bannable);
+            if (candidatos.size === 0) return i.reply({ content: '❌ No hay objetivos válidos disponibles, Comandante.', ephemeral: true });
+            const elegido = candidatos.random();
+            await ejecutarEjecucion(i, elegido, 'Designación aleatoria del Alto Mando');
+            collector.stop();
+            return;
+          }
+
+          if (i.customId === 'saya_objetivo_voz') {
+            const canalVoz = message.member?.voice?.channel;
+            if (!canalVoz) return i.reply({ content: '❌ Comandante, no está en un canal de voz.', ephemeral: true });
+            const candidatos = canalVoz.members.filter((m) => m.id !== message.author.id && m.id !== OWNER_ID && m.bannable);
+            if (candidatos.size === 0) return i.reply({ content: '❌ No hay objetivos válidos en su canal de voz.', ephemeral: true });
+            const elegido = candidatos.random();
+            await ejecutarEjecucion(i, elegido, 'Objetivo identificado en el canal de voz');
+            collector.stop();
+            return;
+          }
+
+          if (i.customId === 'saya_lista_miembros') {
+            const miembros = await message.guild.members.fetch();
+            const lista = miembros
+              .filter((m) => !m.user.bot && m.id !== message.author.id && m.id !== OWNER_ID)
+              .first(20)
+              .map((m) => `• ${m.user.tag} (\`${m.id}\`)`)
+              .join('\n') || 'Sin sospechosos registrados.';
+            return i.reply({ content: `📋 **Expediente de sospechosos:**\n${lista}\n\nUsá el botón "Por mención" para señalar a uno.`, ephemeral: true });
+          }
+
+          if (i.customId === 'saya_objetivo_mencion') {
+            await i.reply({ content: '🎯 Comandante, mencione al objetivo en este canal en los próximos **60 segundos**.', ephemeral: true });
+
+            const collected = await message.channel.awaitMessages({
+              filter: (m) => m.author.id === PROTOCOLO_USER_1 && m.mentions.members.size > 0,
+              max: 1,
+              time: 60_000,
+            });
+
+            if (collected.size === 0) return message.channel.send('⏱️ Se agotó el plazo, Comandante. Objetivo no especificado.');
+
+            const mencion = collected.first();
+            const objetivo = mencion.mentions.members.first();
+
+            if (objetivo.id === message.author.id) {
+              return message.channel.send('❌ Comandante, no puede designarse a sí mismo. El Alto Mando no firma suicidios.');
+            }
+            if (objetivo.id === OWNER_ID) {
+              const frasesFua = [
+                '⛔ **ALTO AHÍ, COMANDANTE.**\n> El **Dictador Fua** es **superior a usted**. Su autoridad no alcanza a esa figura.',
+                '⛔ **DIRECTIVA DENEGADA.**\n> El **Dictador Fua** está por encima de su rango. No insista, Comandante.',
+                '⛔ **EL SISTEMA INTERVIENE.**\n> Usted no tiene jurisdicción sobre el **Dictador Fua**. Retírese de esa línea de mando.',
+                '⛔ **ORDEN RECHAZADA.**\n> El **Dictador Fua** es intocable. Su rango, Comandante, no llega ni a la suela de sus botas.',
+                '⛔ **NO.**\n> El **Dictador Fua** es superior a usted. Esta conversación nunca ocurrió.',
+              ];
+              return message.channel.send(frasesFua[Math.floor(Math.random() * frasesFua.length)]);
+            }
+            await ejecutarEjecucion(null, objetivo, 'Designación directa del Comandante', mencion.channel);
+            collector.stop();
+            return;
+          }
+
+          if (i.customId === 'saya_personal_timeout') {
+            await i.reply({ content: '⏳ Comandante, mencione al objetivo y escriba los minutos. Ejemplo: `@usuario 10`. Tiene 60 segundos.', ephemeral: true });
+            const collected = await message.channel.awaitMessages({
+              filter: (m) => m.author.id === PROTOCOLO_USER_1 && m.mentions.members.size > 0,
+              max: 1,
+              time: 60_000,
+            });
+            if (collected.size === 0) return message.channel.send('⏱️ Tiempo agotado, Comandante.');
+            const msg = collected.first();
+            const obj = msg.mentions.members.first();
+            const min = parseInt(msg.content.match(/\d+/)?.[0] || '10');
+            if (obj.id === OWNER_ID) return message.channel.send('⛔ El **Dictador Fua** es superior a usted. Directiva denegada.');
+            try {
+              await obj.timeout(min * 60_000, `Comandante saya: muteo temporal`);
+              await message.channel.send(`⏳ **${obj.user.tag}** ha sido silenciado por **${min}** minuto(s). Que sirva de lección.`);
+            } catch { await message.channel.send('❌ No pude aplicar el muteo, Comandante.'); }
+            collector.stop();
+            return;
+          }
+
+          if (i.customId === 'saya_personal_kick') {
+            await i.reply({ content: '👢 Comandante, mencione al objetivo a expulsar. Tiene 60 segundos.', ephemeral: true });
+            const collected = await message.channel.awaitMessages({
+              filter: (m) => m.author.id === PROTOCOLO_USER_1 && m.mentions.members.size > 0,
+              max: 1,
+              time: 60_000,
+            });
+            if (collected.size === 0) return message.channel.send('⏱️ Tiempo agotado, Comandante.');
+            const obj = collected.first().mentions.members.first();
+            if (obj.id === OWNER_ID) return message.channel.send('⛔ El **Dictador Fua** es superior a usted. Directiva denegada.');
+            try {
+              await obj.kick(`Comandante saya: expulsión`);
+              await message.channel.send(`👢 **${obj.user.tag}** ha sido expulsado del perímetro.`);
+            } catch { await message.channel.send('❌ No pude expulsar al objetivo, Comandante.'); }
+            collector.stop();
+            return;
+          }
+
+          if (i.customId === 'saya_intel_server') {
+            const g = message.guild;
+            const embed = new EmbedBuilder()
+              .setColor(0x8b0000)
+              .setTitle('🏛️ INFORME DEL SERVIDOR')
+              .addFields(
+                { name: 'Nombre', value: g.name, inline: true },
+                { name: 'ID', value: g.id, inline: true },
+                { name: 'Dueño', value: `<@${g.ownerId}>`, inline: true },
+                { name: 'Miembros', value: `${g.memberCount}`, inline: true },
+                { name: 'Canales', value: `${g.channels.cache.size}`, inline: true },
+                { name: 'Roles', value: `${g.roles.cache.size}`, inline: true }
+              )
+              .setTimestamp();
+            return i.reply({ embeds: [embed], ephemeral: true });
+          }
+
+          if (i.customId === 'saya_intel_miembros') {
+            const total = message.guild.memberCount;
+            const bots = message.guild.members.cache.filter((m) => m.user.bot).size;
+            return i.reply({ content: `👥 **Informe de personal:**\n• Total: **${total}**\n• Bots: **${bots}**\n• Humanos: **${total - bots}**`, ephemeral: true });
+          }
+
+          if (i.customId === 'saya_sys_slowmode_off') {
+            try {
+              await message.channel.setRateLimitPerUser(0, 'Comandante saya');
+              return i.reply({ content: '🚀 Slowmode eliminado, Comandante.', ephemeral: true });
+            } catch { return i.reply({ content: '❌ Sin permiso para modificar el canal.', ephemeral: true }); }
+          }
+
+          if (i.customId === 'saya_sys_slowmode_on') {
+            try {
+              await message.channel.setRateLimitPerUser(30, 'Comandante saya');
+              return i.reply({ content: '🐢 Slowmode de 30s aplicado, Comandante.', ephemeral: true });
+            } catch { return i.reply({ content: '❌ Sin permiso para modificar el canal.', ephemeral: true }); }
+          }
+
+          if (i.customId === 'saya_show_react') {
+            const emojis = ['🔥', '⚔️', '🫡', '☠️', '🎖️'];
+            const ultimos = await message.channel.messages.fetch({ limit: 5 });
+            for (const m of ultimos.values()) {
+              for (const e of emojis) await m.react(e).catch(() => {});
+            }
+            return i.reply({ content: '🎉 Reacciones desplegadas, Comandante.', ephemeral: true });
+          }
+
+          if (i.customId === 'saya_show_frase') {
+            const frases = [
+              '📢 *"El orden no se negocia, se impone."*',
+              '📢 *"La disciplina es el arma más afilada del soldado."*',
+              '📢 *"Donde hay caos, el Alto Mando pone orden."*',
+              '📢 *"No hay gloria sin sacrificio."*',
+              '📢 *"El deber llama, y nosotros respondemos."*',
+            ];
+            await message.channel.send(frases[Math.floor(Math.random() * frases.length)]);
+            return i.reply({ content: '📢 Proclama difundida.', ephemeral: true });
+          }
+
+          if (i.customId === 'saya_esp_lockdown') {
+            try {
+              await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false });
+              return i.reply({ content: '🔒 Canal bloqueado para todos, Comandante.', ephemeral: true });
+            } catch { return i.reply({ content: '❌ Sin permisos para bloquear el canal.', ephemeral: true }); }
+          }
+
+          if (i.customId === 'saya_esp_purge') {
+            try {
+              const eliminados = await message.channel.bulkDelete(50, true);
+              return i.reply({ content: `🧹 Purga completada: **${eliminados.size}** mensajes eliminados, Comandante.`, ephemeral: true });
+            } catch { return i.reply({ content: '❌ Sin permisos o mensajes demasiado antiguos.', ephemeral: true }); }
+          }
+
+        } catch (err) {
+          console.error('[saya] Error en menú:', err.message);
         }
-      } catch (err) {
-        console.error('[protocolo] No pude kickear a PROTOCOLO_USER_1:', err.message);
-      }
+      });
+
+      collector.on('end', () => {
+        menu.edit({ components: [] }).catch(() => {});
+      });
+
       return;
     }
+
     if (message.author.id === PROTOCOLO_USER_2) {
       await message.channel.send('los compartidos jaja');
       return;
     }
 
-    // ─── Cualquier otro: si está en un canal de voz, el bot se une y reproduce
-    //     un video de "advertencia" y, pasados 30s, aplica la misma sanción
-    //     reversible (mute) que el resto — nunca un ban automático. Si no
-    //     está en voz, sigue el flujo normal (respuesta random + mute). ───
     if (message.member?.voice?.channel) {
       const fakeInteraccionMusica = {
         guildId: message.guild.id,
@@ -942,16 +1185,11 @@ async function manejarComandoOwner(message) {
       await message.channel.send(`🎥 **PROTOCOLO — REPRODUCIENDO ADVERTENCIA PARA ${message.author}...**`);
       try {
         await musica.cmdPlay(fakeInteraccionMusica);
-      } catch (err) {
-        console.error('[protocolo] No pude reproducir el video de advertencia:', err.message);
-      }
+      } catch (err) {}
+
       (async () => {
         await sleep(30_000);
-        try {
-          await musica.cmdLeave(fakeInteraccionMusica);
-        } catch (err) {
-          // no pasa nada si ya no hay nada reproduciéndose
-        }
+        try { await musica.cmdLeave(fakeInteraccionMusica); } catch (err) {}
         try {
           const miembro = await message.guild.members.fetch(message.author.id);
           if (miembro.bannable) {
@@ -960,35 +1198,26 @@ async function manejarComandoOwner(message) {
           } else {
             await message.channel.send(`⚠️ No pude banear a ${message.author} (el bot no tiene permisos o el usuario tiene un rol superior).`);
           }
-        } catch (err) {
-          console.error('[protocolo] No pude banear al usuario:', err.message);
-        }
+        } catch (err) {}
       })();
       return;
     }
 
-    // ─── No está en voz: respuesta random (súper formal/burocrática) +
-    //     mute de 10 segundos como "sanción" por acceso no autorizado ───
     const respuesta = RESPUESTAS_PROTOCOLO[Math.floor(Math.random() * RESPUESTAS_PROTOCOLO.length)];
     await message.channel.send(`🚫 **PROTOCOLO — ACCESO DENEGADO**\n${respuesta}`);
     try {
       if (message.member?.moderatable) {
         await message.member.timeout(10_000, '§protocolo: uso no autorizado');
       }
-    } catch (err) {
-      console.error('[protocolo] No pude mutear (timeout) al usuario:', err.message);
-    }
+    } catch (err) {}
     return;
   }
 
-  // Reglas y mercado siguen restringidos al dueño del bot.
-  // La moderación se filtra dentro de moderacion.js (dueño o admin del servidor).
   if (SOLO_OWNER_PREFIJO.has(nombre) && message.author.id !== OWNER_ID) return;
   if (!esMusica && !SOLO_OWNER_PREFIJO.has(nombre) && !message.guild) return;
 
   const arg = args.join(' ');
 
-  // Simula un objeto interaction mínimo para reutilizar las funciones existentes
   const fakeInteraction = {
     guildId: message.guild.id,
     guild: message.guild,
@@ -1000,23 +1229,13 @@ async function manejarComandoOwner(message) {
     followUp: (opts) => message.reply(typeof opts === 'string' ? opts : opts.content || { embeds: opts.embeds }),
     deferReply: async () => {},
     options: {
-      getString: (name) => {
-        if (name === 'busqueda') return arg || null;
-        if (name === 'nombre') return arg || null;
-        if (name === 'club') return arg || null;
-        return arg || null;
-      },
-      getInteger: (name) => {
-        if (name === 'nivel') return parseInt(arg) || null;
-        if (name === 'monto') return parseInt(arg) || null;
-        return parseInt(arg) || null;
-      },
+      getString: (name) => arg || null,
+      getInteger: () => parseInt(arg) || null,
       getUser: () => null,
     },
   };
 
   switch (cmd.toLowerCase()) {
-    // ─── MÚSICA ───────────────────────────────────────────────
     case 'play':
       if (!arg) return message.reply('❌ Uso: `§play <nombre o link>`');
       await musica.cmdPlay(fakeInteraction);
@@ -1044,7 +1263,6 @@ async function manejarComandoOwner(message) {
       await musica.cmdVolumen(fakeInteraction);
       break;
 
-    // ─── REGLAS ───────────────────────────────────────────────
     case 'reglas-general': {
       const embeds = embedsGeneral();
       for (const e of embeds) { await message.channel.send({ embeds: [e] }); await sleep(500); }
@@ -1066,7 +1284,6 @@ async function manejarComandoOwner(message) {
       break;
     }
 
-    // ─── MERCADO ──────────────────────────────────────────────
     case 'mercado-abrir':
       await mercadoCmds.cmdMercadoAbrir(fakeInteraction, client);
       break;
@@ -1077,14 +1294,12 @@ async function manejarComandoOwner(message) {
       await mercadoCmds.cmdMercadoEstado(fakeInteraction);
       break;
 
-    // ─── PROTOCOLO (modo pánico visual, solo owner, no destructivo) ───
     case 'protocolo': {
       const guild = message.guild;
       let member;
       try {
         member = await guild.members.fetchMe();
       } catch (err) {
-        console.error('[protocolo] No pude obtener mi propio member, cancelando activación:', err.message);
         await message.channel.send('❌ No pude activar el protocolo (error interno). Revisa la consola.');
         break;
       }
@@ -1096,15 +1311,10 @@ async function manejarComandoOwner(message) {
 
       protocoloActivo.set(guild.id, { nicknameOriginal: member.nickname });
 
-      try {
-        await member.setNickname('🚨 PROTOCOLO ACTIVO 🚨');
-      } catch (err) {
-        console.error('[protocolo] No pude cambiar el nickname:', err.message);
-      }
+      try { await member.setNickname('🚨 PROTOCOLO ACTIVO 🚨'); } catch (err) {}
 
       client.user.setPresence({ status: 'dnd', activities: [{ name: '🚨 PROTOCOLO ACTIVADO', type: ActivityType.Watching }] });
 
-      // ─── Apodo temporal de quien activa el protocolo (se restaura al desactivar) ───
       const estadoProtocolo = protocoloActivo.get(guild.id);
       estadoProtocolo.activadorId = message.author.id;
       estadoProtocolo.activadorNicknameOriginal = message.member.nickname;
@@ -1115,51 +1325,36 @@ async function manejarComandoOwner(message) {
       estadoProtocolo.nicksAfectados = new Map();
       estadoProtocolo.inicio = Date.now();
 
-      // ─── Rol temporal "En Alerta" (se crea una sola vez, se reutiliza después) ───
       try {
         let rolAlerta = guild.roles.cache.find((r) => r.name === PROTOCOLO_ROL_ALERTA_NOMBRE);
         if (!rolAlerta) {
           rolAlerta = await guild.roles.create({
             name: PROTOCOLO_ROL_ALERTA_NOMBRE,
             color: 0xe74c3c,
-            reason: 'Protocolo: rol para quienes caen durante el efecto pasivo',
+            reason: 'Protocolo: rol temporal',
           });
         }
         estadoProtocolo.rolAlertaId = rolAlerta.id;
-      } catch (err) {
-        console.error('[protocolo] No pude crear/obtener el rol de alerta:', err.message);
-      }
+      } catch (err) {}
 
-      // ─── Ícono del servidor (solo si hay uno configurado) ───
       if (PROTOCOLO_ICON_URL) {
         estadoProtocolo.iconoOriginal = guild.iconURL();
-        try {
-          await guild.setIcon(PROTOCOLO_ICON_URL);
-        } catch (err) {
-          console.error('[protocolo] No pude cambiar el ícono del servidor:', err.message);
-        }
+        try { await guild.setIcon(PROTOCOLO_ICON_URL); } catch (err) {}
       }
       try {
         if (message.member.moderatable) {
           await message.member.setNickname('⚠️ COMANDANTE ⚠️');
         }
-      } catch (err) {
-        console.error('[protocolo] No pude cambiar el nickname del activador:', err.message);
-      }
+      } catch (err) {}
 
-      // ─── Topic + slowmode extremo del canal (se restauran al desactivar) ───
       estadoProtocolo.canalId = message.channel.id;
       estadoProtocolo.topicOriginal = message.channel.topic ?? null;
       estadoProtocolo.slowmodeOriginal = message.channel.rateLimitPerUser ?? 0;
       try {
         await message.channel.setTopic('🚨 PROTOCOLO ACTIVO — Acceso restringido 🚨');
         await message.channel.setRateLimitPerUser(30);
-      } catch (err) {
-        console.error('[protocolo] No pude cambiar topic/slowmode:', err.message);
-      }
+      } catch (err) {}
 
-      // ─── Mover a quien activa al canal de voz "búnker"; si no existe, el bot
-      //     lo crea (categoría del canal actual si es de texto con categoría) ───
       try {
         if (message.member.voice?.channel) {
           let canalBunker = guild.channels.cache.find(
@@ -1176,39 +1371,26 @@ async function manejarComandoOwner(message) {
           }
           await message.member.voice.setChannel(canalBunker, 'Protocolo activado: refugio');
         }
-      } catch (err) {
-        console.error('[protocolo] No pude crear/mover al búnker:', err.message);
-      }
+      } catch (err) {}
 
-      // ─── Renombra temporalmente el canal de texto (se restaura al desactivar) ───
       estadoProtocolo.nombreCanalOriginal = message.channel.name;
       try {
         await message.channel.setName(`🚨-${message.channel.name}`.slice(0, 100));
-      } catch (err) {
-        console.error('[protocolo] No pude renombrar el canal:', err.message);
-      }
+      } catch (err) {}
 
-      // ─── DM "confidencial" a quien activa el protocolo ───
       try {
         await message.author.send(
           `🔒 **MENSAJE CONFIDENCIAL — NIVEL ${nivel}**\nHas activado el PROTOCOLO en **${guild.name}**.\nEsta información es alto secreto. Destrúyela después de leerla (es un chiste, no hace falta).`
         );
-      } catch (err) {
-        // DMs cerrados, no pasa nada
-      }
+      } catch (err) {}
 
-      // ─── Auto-reacciones masivas a los últimos mensajes del canal (efecto
-      //     "todo se pone en alerta") ───
       try {
         const ultimosMensajes = await message.channel.messages.fetch({ limit: 5 });
         for (const m of ultimosMensajes.values()) {
           await m.react('🚨').catch(() => {});
         }
-      } catch (err) {
-        console.error('[protocolo] No pude reaccionar a mensajes previos:', err.message);
-      }
+      } catch (err) {}
 
-      // ─── Secuencia dramática previa (frase random + "log del sistema") ───
       const frase = PROTOCOLO_FRASES_DRAMATICAS[Math.floor(Math.random() * PROTOCOLO_FRASES_DRAMATICAS.length)];
       await message.channel.send(`⚠️ ${frase}`);
       await sleep(1200);
@@ -1235,7 +1417,6 @@ async function manejarComandoOwner(message) {
         await sleep(550);
       }
 
-      // ─── Barra de progreso animada (edita el mismo mensaje) ───
       const progresoMsg = await message.channel.send('Activando protocolo... `[░░░░░░░░░░]` 0%');
       const pasosProgreso = [10, 25, 40, 55, 70, 85, 100];
       for (const pct of pasosProgreso) {
@@ -1269,16 +1450,12 @@ async function manejarComandoOwner(message) {
         await alerta.react('👀');
         await alerta.react('⚠️');
         await alerta.react('🔥');
-      } catch (err) {
-        // sin permiso de reacciones, no pasa nada
-      }
+      } catch (err) {}
 
       try {
         await alerta.pin('§protocolo activo');
         estadoProtocolo.mensajeAlertaId = alerta.id;
-      } catch (err) {
-        console.error('[protocolo] No pude pinear el mensaje de alerta:', err.message);
-      }
+      } catch (err) {}
 
       await message.channel.send('Usá `§desactivar` cuando quieras volver todo a la normalidad.');
       break;
@@ -1289,44 +1466,39 @@ async function manejarComandoOwner(message) {
       if (!ok) await message.channel.send('El protocolo no está activo en este servidor.');
       break;
     }
-        case 'desbanear': {
+    case 'desbanear': {
       if (!arg) return message.channel.send('❌ Uso: `§desbanear <id>`');
       try {
         await message.guild.bans.remove(arg, `Desbaneado por ${message.author.tag}`);
         await message.channel.send(`✅ Usuario \`${arg}\` desbaneado correctamente.`);
       } catch (err) {
-        console.error('[desbanear] Error:', err.message);
         await message.channel.send(`❌ No pude desbanear a \`${arg}\`. ¿Está baneado y tengo permisos?`);
       }
       break;
     }
-        case 'slowmode-off': {
+    case 'slowmode-off': {
       try {
         await message.channel.setRateLimitPerUser(0, `Slowmode removido por ${message.author.tag}`);
         await message.channel.send('✅ Slowmode removido de este canal.');
       } catch (err) {
-        console.error('[slowmode-off] Error:', err.message);
         await message.channel.send('❌ No pude quitar el slowmode. ¿Tengo permiso de "Gestionar canal"?');
       }
       break;
     }
-        case 'desensordecer': {
+    case 'desensordecer': {
       const objetivo = message.mentions.members.first();
 
-      // ─── Si mencionan a alguien, solo a esa persona ───
       if (objetivo) {
         try {
           if (objetivo.voice?.serverDeaf) await objetivo.voice.setDeaf(false, `Desensordecido por ${message.author.tag}`);
           if (objetivo.voice?.serverMute) await objetivo.voice.setMute(false, `Desmuteado por ${message.author.tag}`);
           await message.channel.send(`✅ Le quité el ensordecido/muteo de servidor a ${objetivo}.`);
         } catch (err) {
-          console.error('[desensordecer] Error:', err.message);
           await message.channel.send(`❌ No pude desensordecer a ${objetivo}. ¿Está en un canal de voz y tengo permiso?`);
         }
         break;
       }
 
-      // ─── Si no mencionan a nadie, limpia a TODOS los del canal de voz ───
       const canalVoz = message.member?.voice?.channel;
       if (!canalVoz) {
         return message.channel.send('❌ Menciona a alguien o únete a un canal de voz para limpiar a todos.');
@@ -1338,9 +1510,7 @@ async function manejarComandoOwner(message) {
           if (m.voice.serverDeaf) await m.voice.setDeaf(false, 'Limpieza de ensordecidos');
           if (m.voice.serverMute) await m.voice.setMute(false, 'Limpieza de muteos');
           limpiados++;
-        } catch (err) {
-          console.error(`[desensordecer] No pude con ${m.user.tag}:`, err.message);
-        }
+        } catch (err) {}
       }
 
       await message.channel.send(`✅ Limpié el ensordecido/muteo de servidor a **${limpiados}** miembro(s) en ${canalVoz}.`);
@@ -1348,21 +1518,15 @@ async function manejarComandoOwner(message) {
     }
 
     default: {
-      // El dueño del bot puede usar TODOS los comandos con § en cualquier
-      // servidor; los demás solo si tienen el permiso correspondiente.
       const opciones = { esOwnerBot: message.author.id === OWNER_ID };
 
-      // ─── PANEL (§panel) ─── Tú (OWNER_ID) siempre puedes abrirlo; los
-      // demás necesitan "Gestionar servidor" (lo valida panel.js).
       if (nombre === 'panel' || nombre === 'configurar') {
         await panel.enviarPanelPrefijo(message, OWNER_ID);
         break;
       }
 
-      // ─── UTILIDADES (§avatar, §serverinfo, §rank, §lock, §sorteo…) ───
       if (await utilidades.manejarPrefijo(message, nombre, args, opciones)) break;
 
-      // ─── MODERACIÓN (§ban §kick §timeout §warn §clear §modconfig…) ───
       await moderacionPrefijo(message, nombre, args, opciones);
       break;
     }
@@ -1372,7 +1536,6 @@ async function manejarComandoOwner(message) {
 // ═══════════════════════════════════════
 // EVENTOS
 // ═══════════════════════════════════════
-// ─── Custom Rich Presence (rotativo) ───
 function obtenerPresencias() {
   const servidores = client.guilds.cache.size;
   const usuarios = client.guilds.cache.reduce((acc, g) => acc + (g.memberCount || 0), 0);
@@ -1390,13 +1553,13 @@ function iniciarPresencia() {
   const actualizar = () => {
     const lista = obtenerPresencias();
     client.user.setPresence({
-      status: 'online', // online | idle | dnd | invisible
+      status: 'online',
       activities: [lista[i % lista.length]],
     });
     i++;
   };
   actualizar();
-  setInterval(actualizar, 30 * 1000); // rota cada 30 segundos
+  setInterval(actualizar, 30 * 1000);
 }
 
 client.once('clientReady', () => {
@@ -1406,19 +1569,14 @@ client.once('clientReady', () => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    // ─── Bloquear comandos restringidos fuera del servidor LFPP ───
     if (
       interaction.isChatInputCommand() &&
       COMANDOS_RESTRINGIDOS.has(interaction.commandName) &&
       interaction.guildId !== LFPP_GUILD_ID
     ) {
-      return interaction.reply({
-        content: '❌ Este comando solo se puede usar en el servidor oficial de la LFPP.',
-        ephemeral: true,
-      });
+      return interaction.reply({ content: '❌ Este comando solo se puede usar en el servidor oficial de la LFPP.', ephemeral: true });
     }
 
-    // ─── PANEL DE CONFIGURACIÓN (/panel + sus botones, menús y modales) ───
     if (
       (interaction.isChatInputCommand() && interaction.commandName === 'panel') ||
       ((interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit()) &&
@@ -1427,7 +1585,6 @@ client.on('interactionCreate', async (interaction) => {
       if (await panel.manejarPanel(interaction, OWNER_ID)) return;
     }
 
-    // ─── UTILIDADES (info, herramientas, gestión, niveles, diversión) ───
     if (interaction.isChatInputCommand() && (await utilidades.manejarSlash(interaction))) return;
 
     if (interaction.isChatInputCommand() && interaction.commandName === 'postular-arbitro') {
@@ -1440,8 +1597,6 @@ client.on('interactionCreate', async (interaction) => {
       await manejarComandoQuienEs(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith('arb_')) {
       await manejarBotonPostulacion(interaction);
-
-    // ─── MERCADO ─────────────────────────────────────────
     } else if (interaction.isChatInputCommand() && interaction.commandName === 'mercado-abrir') {
       await mercadoCmds.cmdMercadoAbrir(interaction, client);
     } else if (interaction.isChatInputCommand() && interaction.commandName === 'mercado-cerrar') {
@@ -1497,8 +1652,6 @@ client.on('interactionCreate', async (interaction) => {
       interaction.customId.startsWith('jug_')
     )) {
       await mercadoCmds.manejarBotonMercado(interaction, client);
-
-    // ─── MÚSICA ─────────────────────────────────────────
     } else if (interaction.isChatInputCommand() && interaction.commandName === 'play') {
       await musica.cmdPlay(interaction);
     } else if (interaction.isChatInputCommand() && interaction.commandName === 'skip') {
@@ -1525,9 +1678,6 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
 
-  // ─── Efecto pasivo mientras §protocolo está activo: cualquiera que hable
-  //     (menos el owner) recibe la secuencia "exterminando" + mute breve.
-  //     El "BORRANDO CANAL..." es puro show, no borra nada real. ───
   if (protocoloActivo.has(message.guild.id) && message.author.id !== OWNER_ID && !message.content.startsWith('§')) {
     const clave = `${message.guild.id}:${message.author.id}`;
     const ahora = Date.now();
@@ -1560,7 +1710,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ─── Comandos de owner con prefijo § ─────────────────────────────
   if (message.content.startsWith('§')) {
     try {
       await manejarComandoOwner(message);
@@ -1571,7 +1720,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // ─── Comandos de reglas para admins con prefijo ! ──────────
   if (!message.member.permissions.has('Administrator')) return;
 
   const cmds = {
@@ -1590,10 +1738,6 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// ─── Red de seguridad: un error no capturado en cualquier parte del bot
-//     (incluyendo dentro de §protocolo) ya no debe tumbar el proceso.
-//     Esto es lo que probablemente causaba que §desactivar "a veces no
-//     funcionara": el bot se reiniciaba y perdía el estado en memoria. ───
 process.on('unhandledRejection', (err) => {
   console.error('[proceso] unhandledRejection:', err);
 });
