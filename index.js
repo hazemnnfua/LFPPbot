@@ -31,6 +31,91 @@ const CANAL_REGISTROS_VERIFICACION_ID = '1549624039327141898';
 // ─── ID del dueño del bot — puede usar comandos con prefijo § en cualquier servidor ───
 const OWNER_ID = '720788058684784691';
 
+// ─── IDs con reacciones especiales para el comando §protocolo (solo humor, no destructivo) ───
+const PROTOCOLO_USER_1 = '1094422375837212814'; // recibe Eh? -> saya -> andate alv + kick puntual
+const PROTOCOLO_USER_2 = '1523052015838560498'; // dueño del server, recibe "los compartidos jaja", nunca se kickea
+
+// ─── Estado del "protocolo" (modo pánico visual, no destructivo) por servidor ───
+// Guarda el nickname original del bot para poder restaurarlo con §desactivar
+const protocoloActivo = new Map(); // guildId -> { nicknameOriginal }
+
+// ─── Cooldown por usuario para el efecto "exterminando" mientras el protocolo
+//     está activo, así no se dispara en cada mensaje seguido ───
+const protocoloUltimoTrigger = new Map(); // `${guildId}:${userId}` -> timestamp
+
+// ─── Nombres de canal falsos para el efecto "BORRANDO..." (no borra nada real) ───
+const PROTOCOLO_CANALES_FALSOS = ['#general', '#anuncios', '#mercado', '#reglas', '#chat-general', '#bienvenida'];
+
+// ─── GIF dramático para el embed de activación de §protocolo (reemplazable) ───
+const PROTOCOLO_GIF_URL = 'https://media.tenor.com/2roX3-D1QEwAAAAC/alarm-siren.gif';
+
+// ─── Frases de apertura dramáticas para la secuencia de activación de §protocolo ───
+const PROTOCOLO_FRASES_DRAMATICAS = [
+  'Se ha detectado una anomalía de nivel crítico.',
+  'Los sistemas de contención están al límite.',
+  'Esto no es un simulacro.',
+  'Todas las unidades, prepárense.',
+  'La situación ha escalado más allá de lo previsto.',
+  'El punto de no retorno ha sido superado.',
+  'Se activa el nivel máximo de alerta.',
+  'Nadie sale, nadie entra.',
+];
+
+// ─── Respuestas random (tono súper formal/burocrático, humor de meme) para
+//     cualquiera que use §protocolo sin ser owner ni tener reacción propia ───
+const RESPUESTAS_PROTOCOLO = [
+  'Por disposición del Artículo 7 del Reglamento Interno, su solicitud ha sido denegada.',
+  'Acceso restringido. Favor dirigirse a Mesa de Partes para tramitar su reclamo.',
+  'Su nivel de autorización es insuficiente para ejecutar este procedimiento.',
+  'Solicitud recibida, evaluada y rechazada en un lapso de 0.03 segundos.',
+  'El comité directivo no reconoce su jurisdicción sobre este protocolo.',
+  'Trámite observado. Vuelva a presentarse con la documentación correspondiente.',
+  'Su usuario ha sido registrado en el libro de reclamaciones por intento no autorizado.',
+  'Conforme al inciso 3.2, queda usted formalmente sin permisos para continuar.',
+  'Este canal no es competente para atender su requerimiento.',
+  'Se le informa que su gestión ha sido archivada por falta de mérito.',
+  'La presente solicitud excede sus atribuciones contractuales.',
+  'Notificación oficial: usted no figura en la nómina de personal autorizado.',
+  'Por unanimidad, la mesa directiva rechaza su moción.',
+  'Este proceso requiere firma y sello, de los cuales usted carece.',
+  'Su ticket ha sido escalado y posteriormente cerrado sin resolución.',
+  'Queda usted notificado de que no cuenta con las credenciales requeridas.',
+  'El sistema ha determinado, con alta confianza, que usted no es el indicado.',
+  'Procedimiento denegado por resolución administrativa N.° 0001.',
+  'Se solicita a usted abstenerse de repetir este intento.',
+  'Su perfil no cumple los requisitos mínimos establecidos en las bases.',
+  'La auditoría interna no valida su intervención en este protocolo.',
+  'Trámite suspendido indefinidamente por causas ajenas a su voluntad.',
+  'Usted ha sido clasificado como "personal no esencial" para este proceso.',
+  'Se le comunica que su solicitud fue derivada al área de "Nunca".',
+  'Este protocolo se encuentra bajo reserva absoluta. Retírese, por favor.',
+  'Resolución final: no. Sin apelación posible.',
+  'Su acceso ha sido evaluado por un comité de expertos y descartado.',
+  'Conforme al debido proceso, se le informa que el debido proceso no aplica aquí.',
+  'La presente gestión ha sido calificada como "fuera de competencia".',
+  'Se procede a registrar su intento en el acta de incidentes del día.',
+  'El área correspondiente informa que usted no tiene área correspondiente.',
+  'Su solicitud ha sido leída, comprendida y respetuosamente ignorada.',
+  'Queda usted a la espera de una respuesta que no llegará.',
+  'Por motivos de protocolo, el protocolo le es negado.',
+  'Se deja constancia de que este mensaje es oficial, formal e inapelable.',
+  'El presente trámite ha sido clasificado como "alto riesgo, cero permiso".',
+  'La comisión evaluadora concluye: rotundamente no.',
+  'Se le recuerda que la formalidad no sustituye la autorización.',
+  'Este canal certifica que usted, oficialmente, no puede.',
+  'Solicitud rechazada por el comité de asuntos que no le incumben.',
+  'Se notifica el cierre definitivo de su intento, sin derecho a reapertura.',
+  'La entidad correspondiente no reconoce su firma digital.',
+  'Trámite denegado por decisión soberana e inapelable del sistema.',
+  'Se le informa que su nivel de acceso corresponde a "espectador".',
+  'Por disposición superior, su participación queda formalmente descartada.',
+  'El expediente ha sido cerrado antes de ser abierto.',
+  'Se certifica que usted no cumple ni un solo requisito.',
+  'Resolución administrativa: su intento queda sin efecto legal alguno.',
+  'La mesa de partes informa que no existe mesa de partes.',
+  'Trámite concluido: motivo, usted.',
+];
+
 // ─── Servidor al que quedan restringidos árbitros, verificación, admin,
 //     presidente, jugador y consultas del mercado (deploy-commands.js
 //     ya los registra solo ahí; esto es una red de seguridad extra) ───
@@ -656,6 +741,45 @@ async function manejarComandoOwner(message) {
   const nombre = (cmd || '').toLowerCase();
   const esMusica = MUSICA_COMANDOS_PREFIJO.has(nombre);
 
+  // ─── §protocolo: solo vos (OWNER_ID) lo activa de verdad.
+  //     Si lo escribe alguna otra persona, responde según quién sea
+  //     (personalidad/humor) en vez de ejecutar nada. ───
+  if (nombre === 'protocolo' && message.author.id !== OWNER_ID) {
+    if (message.author.id === PROTOCOLO_USER_1) {
+      await message.channel.send('Eh?');
+      await sleep(2000);
+      await message.channel.send('que haces aca saya');
+      await sleep(1000);
+      await message.channel.send('andate alv');
+      try {
+        const member = await message.guild.members.fetch(PROTOCOLO_USER_1);
+        if (member.kickable) {
+          await member.kick(`${message.author.tag}: uso no autorizado de §protocolo`);
+        }
+      } catch (err) {
+        console.error('[protocolo] No pude kickear a PROTOCOLO_USER_1:', err.message);
+      }
+      return;
+    }
+    if (message.author.id === PROTOCOLO_USER_2) {
+      await message.channel.send('los compartidos jaja');
+      return;
+    }
+
+    // ─── Cualquier otro: respuesta random (súper formal/burocrática) +
+    //     mute de 10 segundos como "sanción" por acceso no autorizado ───
+    const respuesta = RESPUESTAS_PROTOCOLO[Math.floor(Math.random() * RESPUESTAS_PROTOCOLO.length)];
+    await message.channel.send(`🚫 **PROTOCOLO — ACCESO DENEGADO**\n${respuesta}`);
+    try {
+      if (message.member?.moderatable) {
+        await message.member.timeout(10_000, '§protocolo: uso no autorizado');
+      }
+    } catch (err) {
+      console.error('[protocolo] No pude mutear (timeout) al usuario:', err.message);
+    }
+    return;
+  }
+
   // Reglas y mercado siguen restringidos al dueño del bot.
   // La moderación se filtra dentro de moderacion.js (dueño o admin del servidor).
   if (SOLO_OWNER_PREFIJO.has(nombre) && message.author.id !== OWNER_ID) return;
@@ -751,6 +875,167 @@ async function manejarComandoOwner(message) {
     case 'mercado-estado':
       await mercadoCmds.cmdMercadoEstado(fakeInteraction);
       break;
+
+    // ─── PROTOCOLO (modo pánico visual, solo owner, no destructivo) ───
+    case 'protocolo': {
+      const guild = message.guild;
+      const member = await guild.members.fetchMe();
+
+      if (protocoloActivo.has(guild.id)) {
+        await message.channel.send('⚠️ El protocolo ya está activo en este servidor. Usá `§desactivar` para apagarlo.');
+        break;
+      }
+
+      protocoloActivo.set(guild.id, { nicknameOriginal: member.nickname });
+
+      try {
+        await member.setNickname('🚨 PROTOCOLO ACTIVO 🚨');
+      } catch (err) {
+        console.error('[protocolo] No pude cambiar el nickname:', err.message);
+      }
+
+      client.user.setPresence({ status: 'dnd', activities: [{ name: '🚨 PROTOCOLO ACTIVADO', type: ActivityType.Watching }] });
+
+      // ─── Apodo temporal de quien activa el protocolo (se restaura al desactivar) ───
+      const estadoProtocolo = protocoloActivo.get(guild.id);
+      estadoProtocolo.activadorId = message.author.id;
+      estadoProtocolo.activadorNicknameOriginal = message.member.nickname;
+      try {
+        if (message.member.moderatable) {
+          await message.member.setNickname('⚠️ COMANDANTE ⚠️');
+        }
+      } catch (err) {
+        console.error('[protocolo] No pude cambiar el nickname del activador:', err.message);
+      }
+
+      // ─── Topic + slowmode extremo del canal (se restauran al desactivar) ───
+      estadoProtocolo.canalId = message.channel.id;
+      estadoProtocolo.topicOriginal = message.channel.topic ?? null;
+      estadoProtocolo.slowmodeOriginal = message.channel.rateLimitPerUser ?? 0;
+      try {
+        await message.channel.setTopic('🚨 PROTOCOLO ACTIVO — Acceso restringido 🚨');
+        await message.channel.setRateLimitPerUser(30);
+      } catch (err) {
+        console.error('[protocolo] No pude cambiar topic/slowmode:', err.message);
+      }
+
+      // ─── Secuencia dramática previa (frase random + "log del sistema") ───
+      const frase = PROTOCOLO_FRASES_DRAMATICAS[Math.floor(Math.random() * PROTOCOLO_FRASES_DRAMATICAS.length)];
+      await message.channel.send(`⚠️ ${frase}`);
+      await sleep(1200);
+
+      const logMsg = await message.channel.send('```\n[INICIANDO PROTOCOLO...]\n```');
+      const logLineas = [
+        '[OK] Verificando credenciales...',
+        '[OK] Escaneando canal...',
+        '[WARN] Nivel de amenaza: ALTO',
+        '[OK] Restringiendo accesos...',
+        '[ERROR] Contención parcial',
+        '[OK] Sellando perímetro...',
+      ];
+      let logAcumulado = '';
+      for (const linea of logLineas) {
+        logAcumulado += `${linea}\n`;
+        await logMsg.edit(`\`\`\`\n${logAcumulado}\`\`\``).catch(() => {});
+        await sleep(550);
+      }
+
+      // ─── Barra de progreso animada (edita el mismo mensaje) ───
+      const progresoMsg = await message.channel.send('Activando protocolo... `[░░░░░░░░░░]` 0%');
+      const pasosProgreso = [10, 25, 40, 55, 70, 85, 100];
+      for (const pct of pasosProgreso) {
+        const llenos = Math.round((pct / 100) * 10);
+        const barraTexto = '▓'.repeat(llenos) + '░'.repeat(10 - llenos);
+        await progresoMsg.edit(`Activando protocolo... \`[${barraTexto}]\` ${pct}%`).catch(() => {});
+        await sleep(400);
+      }
+
+      await message.channel.send('**3**');
+      await sleep(700);
+      await message.channel.send('**2**');
+      await sleep(700);
+      await message.channel.send('**1**');
+      await sleep(700);
+
+      const embedAlerta = new EmbedBuilder()
+        .setColor(0xe74c3c)
+        .setTitle('🚨 PROTOCOLO DE SEGURIDAD ACTIVADO 🚨')
+        .setDescription(`Activado por ${message.author} — todo el mundo a sus puestos.`)
+        .setTimestamp();
+      const alerta = await message.channel.send({ embeds: [embedAlerta] });
+
+      try {
+        await alerta.react('🚨');
+        await alerta.react('👀');
+        await alerta.react('⚠️');
+        await alerta.react('🔥');
+      } catch (err) {
+        // sin permiso de reacciones, no pasa nada
+      }
+
+      try {
+        await alerta.pin('§protocolo activo');
+        estadoProtocolo.mensajeAlertaId = alerta.id;
+      } catch (err) {
+        console.error('[protocolo] No pude pinear el mensaje de alerta:', err.message);
+      }
+
+      await message.channel.send('Usá `§desactivar` cuando quieras volver todo a la normalidad.');
+      break;
+    }
+
+    case 'desactivar': {
+      const guild = message.guild;
+      const estado = protocoloActivo.get(guild.id);
+
+      if (!estado) {
+        await message.channel.send('El protocolo no está activo en este servidor.');
+        break;
+      }
+
+      try {
+        const member = await guild.members.fetchMe();
+        await member.setNickname(estado.nicknameOriginal || null);
+      } catch (err) {
+        console.error('[protocolo] No pude restaurar el nickname:', err.message);
+      }
+
+      if (estado.activadorId) {
+        try {
+          const activador = await guild.members.fetch(estado.activadorId);
+          if (activador.moderatable) await activador.setNickname(estado.activadorNicknameOriginal || null);
+        } catch (err) {
+          console.error('[protocolo] No pude restaurar el nickname del activador:', err.message);
+        }
+      }
+
+      if (estado.canalId) {
+        try {
+          const canal = await guild.channels.fetch(estado.canalId);
+          if (canal) {
+            await canal.setTopic(estado.topicOriginal);
+            await canal.setRateLimitPerUser(estado.slowmodeOriginal || 0);
+          }
+        } catch (err) {
+          console.error('[protocolo] No pude restaurar topic/slowmode:', err.message);
+        }
+      }
+
+      if (estado.mensajeAlertaId) {
+        try {
+          const mensajeAlerta = await message.channel.messages.fetch(estado.mensajeAlertaId);
+          await mensajeAlerta.unpin('§desactivar');
+        } catch (err) {
+          // ya no existe o no se pudo despinear, no pasa nada
+        }
+      }
+
+      client.user.setPresence({ status: 'online', activities: [] });
+      protocoloActivo.delete(guild.id);
+
+      await message.channel.send('✅ Protocolo desactivado. Todo vuelve a la normalidad.');
+      break;
+    }
 
     default: {
       // El dueño del bot puede usar TODOS los comandos con § en cualquier
@@ -930,7 +1215,33 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
 
-  // ─── Comandos de owner con prefijo § ───────────────────────
+  // ─── Efecto pasivo mientras §protocolo está activo: cualquiera que hable
+  //     (menos el owner) recibe la secuencia "exterminando" + mute breve.
+  //     El "BORRANDO CANAL..." es puro show, no borra nada real. ───
+  if (protocoloActivo.has(message.guild.id) && message.author.id !== OWNER_ID && !message.content.startsWith('§')) {
+    const clave = `${message.guild.id}:${message.author.id}`;
+    const ahora = Date.now();
+    if (ahora - (protocoloUltimoTrigger.get(clave) || 0) > 15000) {
+      protocoloUltimoTrigger.set(clave, ahora);
+      (async () => {
+        try {
+          await message.channel.send(`🎯 **EXTERMINANDO A ${message.author}...**`);
+          await sleep(900);
+          const canalFalso = PROTOCOLO_CANALES_FALSOS[Math.floor(Math.random() * PROTOCOLO_CANALES_FALSOS.length)];
+          await message.channel.send(`🗑️ BORRANDO CANAL **${canalFalso}**...`);
+          await sleep(900);
+          await message.channel.send('💀 Objetivo neutralizado.');
+          if (message.member?.moderatable) {
+            await message.member.timeout(8_000, '§protocolo: efecto activo');
+          }
+        } catch (err) {
+          console.error('[protocolo] Error en efecto pasivo:', err.message);
+        }
+      })();
+    }
+  }
+
+  // ─── Comandos de owner con prefijo § ─────────────────────────────
   if (message.content.startsWith('§')) {
     await manejarComandoOwner(message);
     return;
