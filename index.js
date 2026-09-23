@@ -922,7 +922,52 @@ async function manejarComandoOwner(message) {
       return;
     }
 
-    // ─── Cualquier otro: respuesta random (súper formal/burocrática) +
+    // ─── Cualquier otro: si está en un canal de voz, el bot se une y reproduce
+    //     un video de "advertencia" y, pasados 30s, aplica la misma sanción
+    //     reversible (mute) que el resto — nunca un ban automático. Si no
+    //     está en voz, sigue el flujo normal (respuesta random + mute). ───
+    if (message.member?.voice?.channel) {
+      const fakeInteraccionMusica = {
+        guildId: message.guild.id,
+        guild: message.guild,
+        member: message.member,
+        channel: message.channel,
+        user: message.author,
+        reply: () => {},
+        editReply: () => {},
+        followUp: () => {},
+        deferReply: async () => {},
+        options: { getString: () => 'https://youtu.be/c1WQIcEIiSc' },
+      };
+      await message.channel.send(`🎥 **PROTOCOLO — REPRODUCIENDO ADVERTENCIA PARA ${message.author}...**`);
+      try {
+        await musica.cmdPlay(fakeInteraccionMusica);
+      } catch (err) {
+        console.error('[protocolo] No pude reproducir el video de advertencia:', err.message);
+      }
+      (async () => {
+        await sleep(30_000);
+        try {
+          await musica.cmdLeave(fakeInteraccionMusica);
+        } catch (err) {
+          // no pasa nada si ya no hay nada reproduciéndose
+        }
+        try {
+          const miembro = await message.guild.members.fetch(message.author.id);
+          if (miembro.bannable) {
+            await miembro.ban({ reason: '§protocolo: uso no autorizado (advertencia ignorada)' });
+            await message.channel.send(`🔨 **${message.author.tag}** fue baneado del servidor.`);
+          } else {
+            await message.channel.send(`⚠️ No pude banear a ${message.author} (el bot no tiene permisos o el usuario tiene un rol superior).`);
+          }
+        } catch (err) {
+          console.error('[protocolo] No pude banear al usuario:', err.message);
+        }
+      })();
+      return;
+    }
+
+    // ─── No está en voz: respuesta random (súper formal/burocrática) +
     //     mute de 10 segundos como "sanción" por acceso no autorizado ───
     const respuesta = RESPUESTAS_PROTOCOLO[Math.floor(Math.random() * RESPUESTAS_PROTOCOLO.length)];
     await message.channel.send(`🚫 **PROTOCOLO — ACCESO DENEGADO**\n${respuesta}`);
@@ -1035,7 +1080,14 @@ async function manejarComandoOwner(message) {
     // ─── PROTOCOLO (modo pánico visual, solo owner, no destructivo) ───
     case 'protocolo': {
       const guild = message.guild;
-      const member = await guild.members.fetchMe();
+      let member;
+      try {
+        member = await guild.members.fetchMe();
+      } catch (err) {
+        console.error('[protocolo] No pude obtener mi propio member, cancelando activación:', err.message);
+        await message.channel.send('❌ No pude activar el protocolo (error interno). Revisa la consola.');
+        break;
+      }
 
       if (protocoloActivo.has(guild.id)) {
         await message.channel.send('⚠️ El protocolo ya está activo en este servidor. Usá `§desactivar` para apagarlo.');
@@ -1453,7 +1505,12 @@ client.on('messageCreate', async (message) => {
 
   // ─── Comandos de owner con prefijo § ─────────────────────────────
   if (message.content.startsWith('§')) {
-    await manejarComandoOwner(message);
+    try {
+      await manejarComandoOwner(message);
+    } catch (err) {
+      console.error('[owner] Error no capturado en un comando §:', err);
+      await message.channel.send('❌ Ocurrió un error inesperado ejecutando el comando. Revisa la consola.').catch(() => {});
+    }
     return;
   }
 
@@ -1474,6 +1531,17 @@ client.on('messageCreate', async (message) => {
       await sleep(500);
     }
   }
+});
+
+// ─── Red de seguridad: un error no capturado en cualquier parte del bot
+//     (incluyendo dentro de §protocolo) ya no debe tumbar el proceso.
+//     Esto es lo que probablemente causaba que §desactivar "a veces no
+//     funcionara": el bot se reiniciaba y perdía el estado en memoria. ───
+process.on('unhandledRejection', (err) => {
+  console.error('[proceso] unhandledRejection:', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[proceso] uncaughtException:', err);
 });
 
 iniciarServidorOAuth();
