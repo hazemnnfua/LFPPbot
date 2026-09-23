@@ -8,6 +8,7 @@ const {
   ButtonStyle,
   PermissionFlagsBits,
   ActivityType,
+  ChannelType,
 } = require('discord.js');
 const crypto = require('crypto');
 require('dotenv').config();
@@ -43,8 +44,59 @@ const protocoloActivo = new Map(); // guildId -> { nicknameOriginal }
 //     está activo, así no se dispara en cada mensaje seguido ───
 const protocoloUltimoTrigger = new Map(); // `${guildId}:${userId}` -> timestamp
 
+// ─── Cooldown global: no se puede reactivar §protocolo dos veces seguidas
+//     en menos de este tiempo, para que no pierda gracia por spam ───
+const PROTOCOLO_COOLDOWN_MS = 2 * 60 * 1000;
+const protocoloUltimaActivacion = new Map(); // guildId -> timestamp
+
+// ─── Nombre del canal de voz "búnker" al que se mueve a quien activa el
+//     protocolo si está conectado a voz (búsqueda por nombre, no ID fijo) ───
+const PROTOCOLO_CANAL_BUNKER_NOMBRE = 'búnker';
+
+// ─── Nombre del rol temporal que reciben quienes "caen" durante el protocolo ───
+const PROTOCOLO_ROL_ALERTA_NOMBRE = '🚨 En Alerta';
+
+// ─── ícono del servidor durante el protocolo (reemplazable por uno propio) ───
+const PROTOCOLO_ICON_URL = null; // ej: 'https://tu-imagen.com/icono-alerta.png' — si es null, no se cambia
+
+// ─── ID opcional de un "objetivo especial": si habla durante el protocolo,
+//     recibe un mini-evento único en vez de la secuencia normal (dejar '' si no aplica) ───
+const PROTOCOLO_OBJETIVO_ESPECIAL_ID = '';
+
+// ─── Auto-desactivación si nadie usa §desactivar en este tiempo ───
+const PROTOCOLO_AUTO_DESACTIVAR_MS = 15 * 60 * 1000;
+
+// ─── Frases de cierre random para el informe final de §desactivar ───
+const PROTOCOLO_LINEAS_CIERRE = [
+  '* El PROTOCOLO se detiene.\n> Todos vuelven a sus asuntos... por ahora.',
+  '* La alarma se apaga.\n> Pero algo quedó marcado.',
+  '* Silencio. El sistema descansa.\n> Hasta la próxima vez.',
+  '* El PROTOCOLO se repliega a las sombras.\n> Volverá.',
+];
+
 // ─── Nombres de canal falsos para el efecto "BORRANDO..." (no borra nada real) ───
 const PROTOCOLO_CANALES_FALSOS = ['#general', '#anuncios', '#mercado', '#reglas', '#chat-general', '#bienvenida'];
+
+// ─── Nivel de alerta escalonado por servidor (sube con cada activación del mismo
+//     día, se resetea al día siguiente) ───
+const protocoloNivelPorGuild = new Map(); // guildId -> { fecha, nivel }
+
+function calcularNivelProtocolo(guildId) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const registro = protocoloNivelPorGuild.get(guildId);
+  const nivel = registro && registro.fecha === hoy ? registro.nivel + 1 : 1;
+  protocoloNivelPorGuild.set(guildId, { fecha: hoy, nivel });
+  return Math.min(nivel, 5); // tope en 5 para que no se vuelva eterno
+}
+
+// ─── Probabilidad de que alguien "sobreviva" al efecto pasivo (vibra Undertale) ───
+const PROTOCOLO_SOBREVIVIENTE_CHANCE = 0.15;
+const PROTOCOLO_LINEAS_SOBREVIVIENTE = [
+  '* Sientes que todavía te queda DETERMINACIÓN.\n> Fuiste PERDONADO.',
+  '* Por algún motivo, el protocolo decide no continuar.\n> ES SUFICIENTE.',
+  '* En el fondo, el sistema no quería hacerlo.\n> Elegiste MISERICORDIA.',
+  '* Algo en tu interior brilla débilmente.\n> No fuiste ELIMINADO.',
+];
 
 // ─── GIF dramático para el embed de activación de §protocolo (reemplazable) ───
 const PROTOCOLO_GIF_URL = 'https://media.tenor.com/2roX3-D1QEwAAAAC/alarm-siren.gif';
@@ -735,6 +787,110 @@ const SOLO_OWNER_PREFIJO = new Set([
   'mercado-abrir', 'mercado-cerrar', 'mercado-estado',
 ]);
 
+// ─── Restaura todo lo que §protocolo cambió y manda el informe final. Se usa
+//     tanto desde §desactivar como desde el auto-apagado por tiempo. ───
+async function desactivarProtocolo(guild, canalAviso) {
+  const estado = protocoloActivo.get(guild.id);
+  if (!estado) return false;
+
+  if (estado.autoTimeout) clearTimeout(estado.autoTimeout);
+  if (estado.tickerInterval) clearInterval(estado.tickerInterval);
+
+  try {
+    const member = await guild.members.fetchMe();
+    await member.setNickname(estado.nicknameOriginal || null);
+  } catch (err) {
+    console.error('[protocolo] No pude restaurar el nickname del bot:', err.message);
+  }
+
+  if (estado.activadorId) {
+    try {
+      const activador = await guild.members.fetch(estado.activadorId);
+      if (activador.moderatable) await activador.setNickname(estado.activadorNicknameOriginal || null);
+    } catch (err) {
+      console.error('[protocolo] No pude restaurar el nickname del activador:', err.message);
+    }
+  }
+
+  if (estado.canalId) {
+    try {
+      const canal = await guild.channels.fetch(estado.canalId);
+      if (canal) {
+        await canal.setTopic(estado.topicOriginal);
+        await canal.setRateLimitPerUser(estado.slowmodeOriginal || 0);
+        if (estado.nombreCanalOriginal) await canal.setName(estado.nombreCanalOriginal);
+      }
+    } catch (err) {
+      console.error('[protocolo] No pude restaurar topic/slowmode/nombre:', err.message);
+    }
+  }
+
+  if (estado.iconoOriginal !== undefined) {
+    try {
+      await guild.setIcon(estado.iconoOriginal);
+    } catch (err) {
+      console.error('[protocolo] No pude restaurar el ícono del servidor:', err.message);
+    }
+  }
+
+  // ─── Restaura nicknames de quienes recibieron el efecto pasivo ───
+  if (estado.nicksAfectados) {
+    for (const [userId, nickOriginal] of estado.nicksAfectados.entries()) {
+      try {
+        const m = await guild.members.fetch(userId);
+        if (m.moderatable) await m.setNickname(nickOriginal || null);
+      } catch (err) {
+        // el usuario puede haberse ido, no pasa nada
+      }
+    }
+  }
+
+  // ─── Quita el rol "En Alerta" a todos los que lo tengan ───
+  if (estado.rolAlertaId) {
+    try {
+      const rol = await guild.roles.fetch(estado.rolAlertaId);
+      if (rol) {
+        for (const m of rol.members.values()) {
+          await m.roles.remove(rol).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error('[protocolo] No pude limpiar el rol de alerta:', err.message);
+    }
+  }
+
+  // ─── Borra el canal búnker solo si el bot lo creó en esta sesión ───
+  if (estado.bunkerCreadoId) {
+    try {
+      const canalBunker = await guild.channels.fetch(estado.bunkerCreadoId);
+      if (canalBunker) await canalBunker.delete('Protocolo desactivado: limpiando búnker temporal');
+    } catch (err) {
+      console.error('[protocolo] No pude borrar el búnker temporal:', err.message);
+    }
+  }
+
+  if (canalAviso && estado.mensajeAlertaId) {
+    try {
+      const mensajeAlerta = await canalAviso.messages.fetch(estado.mensajeAlertaId);
+      await mensajeAlerta.unpin('§desactivar');
+    } catch (err) {
+      // ya no existe o no se pudo despinear, no pasa nada
+    }
+  }
+
+  client.user.setPresence({ status: 'online', activities: [] });
+  protocoloActivo.delete(guild.id);
+
+  if (canalAviso) {
+    const cierre = PROTOCOLO_LINEAS_CIERRE[Math.floor(Math.random() * PROTOCOLO_LINEAS_CIERRE.length)];
+    const reporte = `📄 **INFORME FINAL — NIVEL ${estado.nivel || 1}**\n💀 Objetivos neutralizados: **${estado.exterminados || 0}**\n🌟 Sobrevivientes: **${estado.sobrevivientes || 0}**\n\n${cierre}`;
+    await canalAviso.send('✅ Protocolo desactivado. Todo vuelve a la normalidad.').catch(() => {});
+    await canalAviso.send(reporte).catch(() => {});
+  }
+
+  return true;
+}
+
 async function manejarComandoOwner(message) {
   const contenido = message.content.slice(1).trim(); // quita el §
   const [cmd, ...args] = contenido.split(' ');
@@ -900,6 +1056,37 @@ async function manejarComandoOwner(message) {
       const estadoProtocolo = protocoloActivo.get(guild.id);
       estadoProtocolo.activadorId = message.author.id;
       estadoProtocolo.activadorNicknameOriginal = message.member.nickname;
+      estadoProtocolo.exterminados = 0;
+      estadoProtocolo.sobrevivientes = 0;
+      const nivel = calcularNivelProtocolo(guild.id);
+      estadoProtocolo.nivel = nivel;
+      estadoProtocolo.nicksAfectados = new Map();
+      estadoProtocolo.inicio = Date.now();
+
+      // ─── Rol temporal "En Alerta" (se crea una sola vez, se reutiliza después) ───
+      try {
+        let rolAlerta = guild.roles.cache.find((r) => r.name === PROTOCOLO_ROL_ALERTA_NOMBRE);
+        if (!rolAlerta) {
+          rolAlerta = await guild.roles.create({
+            name: PROTOCOLO_ROL_ALERTA_NOMBRE,
+            color: 0xe74c3c,
+            reason: 'Protocolo: rol para quienes caen durante el efecto pasivo',
+          });
+        }
+        estadoProtocolo.rolAlertaId = rolAlerta.id;
+      } catch (err) {
+        console.error('[protocolo] No pude crear/obtener el rol de alerta:', err.message);
+      }
+
+      // ─── Ícono del servidor (solo si hay uno configurado) ───
+      if (PROTOCOLO_ICON_URL) {
+        estadoProtocolo.iconoOriginal = guild.iconURL();
+        try {
+          await guild.setIcon(PROTOCOLO_ICON_URL);
+        } catch (err) {
+          console.error('[protocolo] No pude cambiar el ícono del servidor:', err.message);
+        }
+      }
       try {
         if (message.member.moderatable) {
           await message.member.setNickname('⚠️ COMANDANTE ⚠️');
@@ -919,13 +1106,63 @@ async function manejarComandoOwner(message) {
         console.error('[protocolo] No pude cambiar topic/slowmode:', err.message);
       }
 
+      // ─── Mover a quien activa al canal de voz "búnker"; si no existe, el bot
+      //     lo crea (categoría del canal actual si es de texto con categoría) ───
+      try {
+        if (message.member.voice?.channel) {
+          let canalBunker = guild.channels.cache.find(
+            (c) => c.isVoiceBased?.() && c.name.toLowerCase().includes(PROTOCOLO_CANAL_BUNKER_NOMBRE)
+          );
+          if (!canalBunker) {
+            canalBunker = await guild.channels.create({
+              name: '🚨-búnker',
+              type: ChannelType.GuildVoice,
+              parent: message.channel.parentId || null,
+              reason: 'Protocolo activado: creando refugio',
+            });
+            estadoProtocolo.bunkerCreadoId = canalBunker.id;
+          }
+          await message.member.voice.setChannel(canalBunker, 'Protocolo activado: refugio');
+        }
+      } catch (err) {
+        console.error('[protocolo] No pude crear/mover al búnker:', err.message);
+      }
+
+      // ─── Renombra temporalmente el canal de texto (se restaura al desactivar) ───
+      estadoProtocolo.nombreCanalOriginal = message.channel.name;
+      try {
+        await message.channel.setName(`🚨-${message.channel.name}`.slice(0, 100));
+      } catch (err) {
+        console.error('[protocolo] No pude renombrar el canal:', err.message);
+      }
+
+      // ─── DM "confidencial" a quien activa el protocolo ───
+      try {
+        await message.author.send(
+          `🔒 **MENSAJE CONFIDENCIAL — NIVEL ${nivel}**\nHas activado el PROTOCOLO en **${guild.name}**.\nEsta información es alto secreto. Destrúyela después de leerla (es un chiste, no hace falta).`
+        );
+      } catch (err) {
+        // DMs cerrados, no pasa nada
+      }
+
+      // ─── Auto-reacciones masivas a los últimos mensajes del canal (efecto
+      //     "todo se pone en alerta") ───
+      try {
+        const ultimosMensajes = await message.channel.messages.fetch({ limit: 5 });
+        for (const m of ultimosMensajes.values()) {
+          await m.react('🚨').catch(() => {});
+        }
+      } catch (err) {
+        console.error('[protocolo] No pude reaccionar a mensajes previos:', err.message);
+      }
+
       // ─── Secuencia dramática previa (frase random + "log del sistema") ───
       const frase = PROTOCOLO_FRASES_DRAMATICAS[Math.floor(Math.random() * PROTOCOLO_FRASES_DRAMATICAS.length)];
       await message.channel.send(`⚠️ ${frase}`);
       await sleep(1200);
 
       const logMsg = await message.channel.send('```\n[INICIANDO PROTOCOLO...]\n```');
-      const logLineas = [
+      const logLineasBase = [
         '[OK] Verificando credenciales...',
         '[OK] Escaneando canal...',
         '[WARN] Nivel de amenaza: ALTO',
@@ -933,6 +1170,12 @@ async function manejarComandoOwner(message) {
         '[ERROR] Contención parcial',
         '[OK] Sellando perímetro...',
       ];
+      const logLineasExtra = [
+        '[WARN] Escalando nivel de respuesta...',
+        `[INFO] NIVEL DE ALERTA: ${nivel}`,
+        '[ERROR] Protocolos anteriores insuficientes',
+      ];
+      const logLineas = nivel > 1 ? [...logLineasBase, ...logLineasExtra.slice(0, nivel - 1)] : logLineasBase;
       let logAcumulado = '';
       for (const linea of logLineas) {
         logAcumulado += `${linea}\n`;
@@ -957,10 +1200,15 @@ async function manejarComandoOwner(message) {
       await message.channel.send('**1**');
       await sleep(700);
 
+      const esNivelMaximo = nivel >= 5;
       const embedAlerta = new EmbedBuilder()
-        .setColor(0xe74c3c)
-        .setTitle('🚨 PROTOCOLO DE SEGURIDAD ACTIVADO 🚨')
-        .setDescription(`Activado por ${message.author} — todo el mundo a sus puestos.`)
+        .setColor(esNivelMaximo ? 0x000000 : 0xe74c3c)
+        .setTitle(esNivelMaximo ? '🖤 PROTOCOLO — NIVEL MÁXIMO ALCANZADO 🖤' : `🚨 PROTOCOLO DE SEGURIDAD ACTIVADO — NIVEL ${nivel} 🚨`)
+        .setDescription(
+          esNivelMaximo
+            ? `Activado por ${message.author}.\n\n* No queda nada más que escalar.\n> Esto es lo más lejos que llega el PROTOCOLO.`
+            : `Activado por ${message.author} — todo el mundo a sus puestos.`
+        )
         .setTimestamp();
       const alerta = await message.channel.send({ embeds: [embedAlerta] });
 
@@ -985,55 +1233,8 @@ async function manejarComandoOwner(message) {
     }
 
     case 'desactivar': {
-      const guild = message.guild;
-      const estado = protocoloActivo.get(guild.id);
-
-      if (!estado) {
-        await message.channel.send('El protocolo no está activo en este servidor.');
-        break;
-      }
-
-      try {
-        const member = await guild.members.fetchMe();
-        await member.setNickname(estado.nicknameOriginal || null);
-      } catch (err) {
-        console.error('[protocolo] No pude restaurar el nickname:', err.message);
-      }
-
-      if (estado.activadorId) {
-        try {
-          const activador = await guild.members.fetch(estado.activadorId);
-          if (activador.moderatable) await activador.setNickname(estado.activadorNicknameOriginal || null);
-        } catch (err) {
-          console.error('[protocolo] No pude restaurar el nickname del activador:', err.message);
-        }
-      }
-
-      if (estado.canalId) {
-        try {
-          const canal = await guild.channels.fetch(estado.canalId);
-          if (canal) {
-            await canal.setTopic(estado.topicOriginal);
-            await canal.setRateLimitPerUser(estado.slowmodeOriginal || 0);
-          }
-        } catch (err) {
-          console.error('[protocolo] No pude restaurar topic/slowmode:', err.message);
-        }
-      }
-
-      if (estado.mensajeAlertaId) {
-        try {
-          const mensajeAlerta = await message.channel.messages.fetch(estado.mensajeAlertaId);
-          await mensajeAlerta.unpin('§desactivar');
-        } catch (err) {
-          // ya no existe o no se pudo despinear, no pasa nada
-        }
-      }
-
-      client.user.setPresence({ status: 'online', activities: [] });
-      protocoloActivo.delete(guild.id);
-
-      await message.channel.send('✅ Protocolo desactivado. Todo vuelve a la normalidad.');
+      const ok = await desactivarProtocolo(message.guild, message.channel);
+      if (!ok) await message.channel.send('El protocolo no está activo en este servidor.');
       break;
     }
 
@@ -1223,16 +1424,25 @@ client.on('messageCreate', async (message) => {
     const ahora = Date.now();
     if (ahora - (protocoloUltimoTrigger.get(clave) || 0) > 15000) {
       protocoloUltimoTrigger.set(clave, ahora);
+      const estadoProtocolo = protocoloActivo.get(message.guild.id);
       (async () => {
         try {
+          if (Math.random() < PROTOCOLO_SOBREVIVIENTE_CHANCE) {
+            const linea = PROTOCOLO_LINEAS_SOBREVIVIENTE[Math.floor(Math.random() * PROTOCOLO_LINEAS_SOBREVIVIENTE.length)];
+            await message.channel.send(`🌟 **${message.author.username} sobrevivió.**\n${linea}`);
+            if (estadoProtocolo) estadoProtocolo.sobrevivientes = (estadoProtocolo.sobrevivientes || 0) + 1;
+            return;
+          }
           await message.channel.send(`🎯 **EXTERMINANDO A ${message.author}...**`);
           await sleep(900);
           const canalFalso = PROTOCOLO_CANALES_FALSOS[Math.floor(Math.random() * PROTOCOLO_CANALES_FALSOS.length)];
           await message.channel.send(`🗑️ BORRANDO CANAL **${canalFalso}**...`);
           await sleep(900);
           await message.channel.send('💀 Objetivo neutralizado.');
+          if (estadoProtocolo) estadoProtocolo.exterminados = (estadoProtocolo.exterminados || 0) + 1;
+          const duracionMute = Math.min(8_000 + ((estadoProtocolo?.nivel || 1) - 1) * 2_000, 20_000);
           if (message.member?.moderatable) {
-            await message.member.timeout(8_000, '§protocolo: efecto activo');
+            await message.member.timeout(duracionMute, '§protocolo: efecto activo');
           }
         } catch (err) {
           console.error('[protocolo] Error en efecto pasivo:', err.message);
