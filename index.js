@@ -1289,6 +1289,17 @@ async function manejarComandoOwner(message) {
       if (!ok) await message.channel.send('El protocolo no está activo en este servidor.');
       break;
     }
+        case 'desbanear': {
+      if (!arg) return message.channel.send('❌ Uso: `§desbanear <id>`');
+      try {
+        await message.guild.bans.remove(arg, `Desbaneado por ${message.author.tag}`);
+        await message.channel.send(`✅ Usuario \`${arg}\` desbaneado correctamente.`);
+      } catch (err) {
+        console.error('[desbanear] Error:', err.message);
+        await message.channel.send(`❌ No pude desbanear a \`${arg}\`. ¿Está baneado y tengo permisos?`);
+      }
+      break;
+    }
 
     default: {
       // El dueño del bot puede usar TODOS los comandos con § en cualquier
