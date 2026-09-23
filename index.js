@@ -1310,6 +1310,42 @@ async function manejarComandoOwner(message) {
       }
       break;
     }
+        case 'desensordecer': {
+      const objetivo = message.mentions.members.first();
+
+      // ─── Si mencionan a alguien, solo a esa persona ───
+      if (objetivo) {
+        try {
+          if (objetivo.voice?.serverDeaf) await objetivo.voice.setDeaf(false, `Desensordecido por ${message.author.tag}`);
+          if (objetivo.voice?.serverMute) await objetivo.voice.setMute(false, `Desmuteado por ${message.author.tag}`);
+          await message.channel.send(`✅ Le quité el ensordecido/muteo de servidor a ${objetivo}.`);
+        } catch (err) {
+          console.error('[desensordecer] Error:', err.message);
+          await message.channel.send(`❌ No pude desensordecer a ${objetivo}. ¿Está en un canal de voz y tengo permiso?`);
+        }
+        break;
+      }
+
+      // ─── Si no mencionan a nadie, limpia a TODOS los del canal de voz ───
+      const canalVoz = message.member?.voice?.channel;
+      if (!canalVoz) {
+        return message.channel.send('❌ Menciona a alguien o únete a un canal de voz para limpiar a todos.');
+      }
+
+      let limpiados = 0;
+      for (const m of canalVoz.members.values()) {
+        try {
+          if (m.voice.serverDeaf) await m.voice.setDeaf(false, 'Limpieza de ensordecidos');
+          if (m.voice.serverMute) await m.voice.setMute(false, 'Limpieza de muteos');
+          limpiados++;
+        } catch (err) {
+          console.error(`[desensordecer] No pude con ${m.user.tag}:`, err.message);
+        }
+      }
+
+      await message.channel.send(`✅ Limpié el ensordecido/muteo de servidor a **${limpiados}** miembro(s) en ${canalVoz}.`);
+      break;
+    }
 
     default: {
       // El dueño del bot puede usar TODOS los comandos con § en cualquier
