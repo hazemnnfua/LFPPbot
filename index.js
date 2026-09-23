@@ -1300,6 +1300,16 @@ async function manejarComandoOwner(message) {
       }
       break;
     }
+        case 'slowmode-off': {
+      try {
+        await message.channel.setRateLimitPerUser(0, `Slowmode removido por ${message.author.tag}`);
+        await message.channel.send('✅ Slowmode removido de este canal.');
+      } catch (err) {
+        console.error('[slowmode-off] Error:', err.message);
+        await message.channel.send('❌ No pude quitar el slowmode. ¿Tengo permiso de "Gestionar canal"?');
+      }
+      break;
+    }
 
     default: {
       // El dueño del bot puede usar TODOS los comandos con § en cualquier
