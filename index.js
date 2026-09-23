@@ -33,7 +33,7 @@ const CANAL_REGISTROS_VERIFICACION_ID = '1549624039327141898';
 const OWNER_ID = '720788058684784691';
 
 // ─── IDs con reacciones especiales para el comando §protocolo (solo humor, no destructivo) ───
-const PROTOCOLO_USER_1 = '1094422375837212814'; // recibe Eh? -> saya -> andate alv + kick puntual
+const PROTOCOLO_USER_1 = ''; // recibe Eh? -> saya -> andate alv + kick puntual
 const PROTOCOLO_USER_2 = '1523052015838560498'; // dueño del server, recibe "los compartidos jaja", nunca se kickea
 
 // ─── Estado del "protocolo" (modo pánico visual, no destructivo) por servidor ───
